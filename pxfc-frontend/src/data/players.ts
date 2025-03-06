@@ -1,0 +1,36 @@
+export const playersData = [
+  {
+    id: "1",
+    name: "Player 1",
+    profilePhoto: "/players/player1.jpg",
+    category: "A+",
+    price: 40000,
+    available: true,
+    wins: 5,
+    experience: "5 years",
+    rating: "9.2/10",
+  },
+  {
+    id: "2",
+    name: "Player 2",
+    profilePhoto: "/players/player2.jpg",
+    category: "B",
+    price: 20000,
+    available: true,
+    wins: 2,
+    experience: "2 years",
+    rating: "7.5/10",
+  },
+  {
+    id: "3",
+    name: "Player 3",
+    profilePhoto: "/players/player3.jpg",
+    category: "D",
+    price: 5000,
+    available: true,
+    wins: 0,
+    experience: "6 months",
+    rating: "6.1/10",
+  },
+  // ✅ Add remaining 261 players here
+];

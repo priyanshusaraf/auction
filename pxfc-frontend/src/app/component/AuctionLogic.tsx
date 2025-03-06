@@ -2,24 +2,12 @@
 
 import { create } from "zustand";
 import { AuctionStore, Player, Team } from "@/types";
+import { playersData } from "@/data/players"; // ✅ Import from external file
+import { teamsData } from "@/data/teams"; // ✅ Import from external file
 
 export const useAuctionStore = create<AuctionStore>((set, get) => ({
-  players: [
-    {
-      id: "1",
-      name: "Player 1",
-      category: "A+",
-      price: 40000,
-      available: true,
-    },
-    { id: "2", name: "Player 2", category: "B", price: 20000, available: true },
-    { id: "3", name: "Player 3", category: "D", price: 5000, available: true },
-  ] as Player[],
-
-  teams: [
-    { id: "team1", name: "Team A", budget: 650000, players: [] },
-    { id: "team2", name: "Team B", budget: 650000, players: [] },
-  ] as Team[],
+  players: [...playersData], // ✅ Load players from external file
+  teams: [...teamsData], // ✅ Load teams from external file
 
   searchQuery: "",
 

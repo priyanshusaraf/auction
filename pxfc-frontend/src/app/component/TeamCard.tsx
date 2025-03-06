@@ -6,7 +6,6 @@ import { useAuctionStore } from "@/component/AuctionLogic";
 import PlayerCard from "./PlayerCard";
 import {
   Dialog,
-  DialogTrigger,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -46,8 +45,8 @@ export default function TeamCard({ team }) {
     if (!player) return;
 
     setSelectedPlayer(player);
-    setBidPrice(player.price.toString()); // ✅ Default to base price
-    setError(""); // Reset error on open
+    setBidPrice(player.price.toString()); // ✅ Default bid price to base price
+    setError(""); // ✅ Reset error on open
   };
 
   const confirmBid = () => {
@@ -69,14 +68,19 @@ export default function TeamCard({ team }) {
     }
 
     addPlayerToTeam(team.id, selectedPlayer.id, bid);
-    setSelectedPlayer(null);
-    setBidPrice(""); // Reset modal
+    closeModal();
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === "Enter") {
-      confirmBid(); // ✅ Pressing Enter/Return triggers bid confirmation
+    if (e.key === "Enter" && !error) {
+      confirmBid(); // ✅ Pressing Enter confirms bid (only if there's no error)
     }
+  };
+
+  const closeModal = () => {
+    setSelectedPlayer(null);
+    setBidPrice(""); // ✅ Reset modal state when closing
+    setError("");
   };
 
   return (
@@ -112,10 +116,7 @@ export default function TeamCard({ team }) {
       </div>
 
       {/* Bid Modal */}
-      <Dialog
-        open={!!selectedPlayer}
-        onOpenChange={() => setSelectedPlayer(null)}
-      >
+      <Dialog open={!!selectedPlayer} onOpenChange={closeModal}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Enter Bid for {selectedPlayer?.name}</DialogTitle>
@@ -132,7 +133,7 @@ export default function TeamCard({ team }) {
               type="number"
               value={bidPrice}
               onChange={(e) => setBidPrice(e.target.value)}
-              onKeyDown={handleKeyDown} // ✅ Pressing Enter confirms bid
+              onKeyDown={handleKeyDown} // ✅ Pressing Enter confirms bid if valid
               min={selectedPlayer?.price}
               className={error ? "border-red-500" : ""}
             />
@@ -142,7 +143,7 @@ export default function TeamCard({ team }) {
 
           {/* Buttons */}
           <div className="flex justify-end gap-2 mt-4">
-            <Button variant="outline" onClick={() => setSelectedPlayer(null)}>
+            <Button variant="outline" onClick={closeModal}>
               Cancel
             </Button>
             <Button onClick={confirmBid} disabled={!!error}>
