@@ -3,16 +3,15 @@ const jwt = require("jsonwebtoken");
 const dotenv = require("dotenv");
 dotenv.config();
 
-const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey"; // Ensure this is in your .env file
+const JWT_SECRET = process.env.JWT_SECRET || "supersecretkey";
 
-// Middleware to verify JWT for admin access
 export const authenticateAdmin = (
   req: Request,
   res: Response,
   next: NextFunction
 ) => {
   try {
-    const token = req.header("Authorization")?.split(" ")[1]; // Extract token from "Bearer <token>"
+    const token = req.header("Authorization")?.split(" ")[1];
     if (!token)
       return res
         .status(401)
@@ -27,7 +26,7 @@ export const authenticateAdmin = (
       return res.status(403).json({ error: "Access denied. Admins only." });
     }
 
-    req.body.adminId = decoded.id; // Attach admin ID to request
+    req.body.adminId = decoded.id;
     next();
   } catch (error) {
     res.status(400).json({ error: "Invalid token." });
