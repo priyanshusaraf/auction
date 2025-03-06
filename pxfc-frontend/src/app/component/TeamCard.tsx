@@ -24,7 +24,7 @@ export default function TeamCard({ team }) {
   );
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [bidPrice, setBidPrice] = useState("");
-  const [error, setError] = useState(""); // Error state for validation
+  const [error, setError] = useState("");
 
   if (!team) {
     return (
@@ -40,21 +40,19 @@ export default function TeamCard({ team }) {
     e.preventDefault();
     const playerId = e.dataTransfer.getData("playerId");
 
-    // Get player details for validation
     const player = useAuctionStore
       .getState()
       .players.find((p) => p.id === playerId);
     if (!player) return;
 
     setSelectedPlayer(player);
-    setBidPrice(player.price.toString()); // ✅ Set default bid price to base price
-    setError(""); // Reset error on opening modal
+    setBidPrice(player.price.toString()); // ✅ Default to base price
+    setError(""); // Reset error on open
   };
 
   const confirmBid = () => {
     const bid = parseInt(bidPrice, 10);
 
-    // ✅ Validation
     if (isNaN(bid) || bid <= 0) {
       setError("Please enter a valid number.");
       return;
@@ -70,10 +68,15 @@ export default function TeamCard({ team }) {
       return;
     }
 
-    // ✅ Add player with bid price
     addPlayerToTeam(team.id, selectedPlayer.id, bid);
     setSelectedPlayer(null);
     setBidPrice(""); // Reset modal
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter") {
+      confirmBid(); // ✅ Pressing Enter/Return triggers bid confirmation
+    }
   };
 
   return (
@@ -129,6 +132,7 @@ export default function TeamCard({ team }) {
               type="number"
               value={bidPrice}
               onChange={(e) => setBidPrice(e.target.value)}
+              onKeyDown={handleKeyDown} // ✅ Pressing Enter confirms bid
               min={selectedPlayer?.price}
               className={error ? "border-red-500" : ""}
             />
