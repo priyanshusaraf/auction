@@ -26,17 +26,15 @@ export default function AuctionPage() {
         {/* Ensure teams are mapped correctly */}
         <div className="grid grid-cols-3 gap-4">
           {Array.isArray(teams) && teams.length > 0 ? (
-            teams.map((team) =>
-              team ? (
-                <TeamCard
-                  key={team.id}
-                  team={team}
-                  isAuthenticated={isSignedIn}
-                />
-              ) : null
-            )
+            teams.map((team) => (
+              <TeamCard
+                key={team.id}
+                team={team}
+                isAuthenticated={isSignedIn}
+              />
+            ))
           ) : (
-            <p className="text-gray-500">No teams available</p> // Prevents rendering errors
+            <p className="text-gray-500 italic">No teams available.</p>
           )}
         </div>
       </div>

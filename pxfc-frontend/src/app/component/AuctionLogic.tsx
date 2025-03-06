@@ -2,7 +2,6 @@
 
 import { create } from "zustand";
 import { AuctionStore, Player, Team } from "@/types";
-import { useUser } from "@clerk/nextjs";
 
 export const useAuctionStore = create<AuctionStore>((set, get) => ({
   players: [
@@ -24,32 +23,28 @@ export const useAuctionStore = create<AuctionStore>((set, get) => ({
 
   searchQuery: "",
 
-  // ✅ Ensure availablePlayers is computed from state
   availablePlayers: () => get().players.filter((p) => p.available),
 
   setSearchQuery: (query: string) => set({ searchQuery: query }),
 
-  addPlayerToTeam: (teamId: string, playerId: string) =>
+  addPlayerToTeam: (teamId: string, playerId: string, bidPrice: number) =>
     set((state) => {
-      const { isSignedIn } = useUser(); // Check authentication
-      if (!isSignedIn) return state; // Prevent unauthorized changes
-
       const player = state.players.find((p) => p.id === playerId);
       if (!player || !player.available) return state;
 
       const team = state.teams.find((t) => t.id === teamId);
-      if (!team || team.budget < player.price) return state;
+      if (!team || team.budget < bidPrice) return state;
 
       return {
         players: state.players.map((p) =>
-          p.id === playerId ? { ...p, available: false } : p
+          p.id === playerId ? { ...p, available: false, price: bidPrice } : p
         ),
         teams: state.teams.map((t) =>
           t.id === teamId
             ? {
                 ...t,
-                players: [...t.players, player],
-                budget: t.budget - player.price,
+                players: [...t.players, { ...player, price: bidPrice }],
+                budget: t.budget - bidPrice,
               }
             : t
         ),
@@ -58,9 +53,6 @@ export const useAuctionStore = create<AuctionStore>((set, get) => ({
 
   removePlayerFromTeam: (teamId: string, playerId: string) =>
     set((state) => {
-      const { isSignedIn } = useUser(); // Check authentication
-      if (!isSignedIn) return state; // Prevent unauthorized changes
-
       const team = state.teams.find((t) => t.id === teamId);
       if (!team) return state;
 
