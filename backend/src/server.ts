@@ -1,32 +1,47 @@
-const cors = require("cors");
-const helmet = require("helmet");
-const express = require("express");
-const http = require("http");
-const dotenv = require("dotenv").config();
+// src/server.ts
+import express from "express";
+import cors from "cors";
+import http from "http";
+import dotenv from "dotenv";
+import { initializeSocket } from "./config/socket";
 import playerRoutes from "./routes/playerRoutes";
 import teamRoutes from "./routes/teamRoutes";
 import auctionRoutes from "./routes/auctionRoutes";
-import { initializeSocket } from "./config/socket";
-import authRoutes from "./routes/authRoutes";
+
+// Load environment variables
+dotenv.config();
 
 const app = express();
-const server = http.createServer(app);
-
-initializeSocket(server);
+const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
-app.use(helmet());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// API Routes
-app.use("/auth", authRoutes); // ✅ Register auth routes
-app.use("/players", playerRoutes);
-app.use("/teams", teamRoutes);
-app.use("/auction", auctionRoutes);
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+});
 
-server.listen(process.env.PORT || 5000, () => {
-  console.log(
-    `✅ Server running on http://localhost:${process.env.PORT || 5000}`
-  );
+// Create HTTP server
+const server = http.createServer(app);
+
+// Initialize Socket.IO
+initializeSocket(server);
+
+// Routes
+app.use("/api/players", playerRoutes);
+app.use("/api/teams", teamRoutes);
+app.use("/api/auction", auctionRoutes);
+
+// Basic route for testing
+app.get("/", (req, res) => {
+  res.json({ message: "Auction API is running!" });
+});
+
+// Start server
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });

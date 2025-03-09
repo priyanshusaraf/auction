@@ -1,6 +1,10 @@
+// src/config/database.ts
 import knex from "knex";
-import config from "../../knexfile";
+import knexConfig from "../../knexfile";
 
-const db = knex(config[process.env.NODE_ENV || "development"]);
+const environment = process.env.NODE_ENV || "development";
+const config = knexConfig[environment as keyof typeof knexConfig];
+
+const db = knex(config);
 
 export default db;

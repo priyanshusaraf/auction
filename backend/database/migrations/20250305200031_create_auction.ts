@@ -1,25 +1,25 @@
 import { Knex } from "knex";
 
-export async function up(knex: Knex): Promise<void> {
+// database/migrations/03_create_auction_table.js
+exports.up = function (knex: Knex) {
   return knex.schema.createTable("auction", (table) => {
     table.increments("id").primary();
     table
       .integer("player_id")
-      .unsigned()
       .references("id")
       .inTable("players")
       .onDelete("CASCADE");
     table
       .integer("team_id")
-      .unsigned()
       .references("id")
       .inTable("teams")
       .onDelete("CASCADE");
-    table.integer("price").notNullable();
-    table.timestamp("created_at").defaultTo(knex.fn.now());
+    table.decimal("price", 12, 2).notNullable();
+    table.decimal("final_price", 12, 2).nullable();
+    table.timestamps(true, true);
   });
-}
+};
 
-export async function down(knex: Knex): Promise<void> {
-  return knex.schema.dropTable("auction");
-}
+exports.down = function (knex: Knex) {
+  return knex.schema.dropTableIfExists("auction");
+};

@@ -1,16 +1,16 @@
 import { Knex } from "knex";
 
-export async function up(knex: Knex): Promise<void> {
+// database/migrations/01_create_teams_table.js
+exports.up = function (knex: Knex) {
   return knex.schema.createTable("teams", (table) => {
     table.increments("id").primary();
     table.string("name").notNullable();
-    table.integer("budget").defaultTo(650000);
-    table.integer("owner_id").unsigned().notNullable();
-    table.timestamp("created_at").defaultTo(knex.fn.now());
-    table.timestamp("updated_at").defaultTo(knex.fn.now());
+    table.decimal("budget", 12, 2).defaultTo(650000);
+    table.integer("owner_id").nullable();
+    table.timestamps(true, true);
   });
-}
+};
 
-export async function down(knex: Knex): Promise<void> {
-  return knex.schema.dropTable("teams");
-}
+exports.down = function (knex: Knex) {
+  return knex.schema.dropTableIfExists("teams");
+};

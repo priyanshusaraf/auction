@@ -1,28 +1,23 @@
 import { Knex } from "knex";
 
-export async function up(knex: Knex): Promise<void> {
-  return knex.schema
-    .createTable("players", (table) => {
-      table.increments("id").primary();
-      table.string("name").notNullable();
-      table.enum("category", ["A+", "A", "B", "C", "D"]).notNullable();
-      table.integer("base_price").notNullable();
-      table.boolean("is_sold").defaultTo(false);
-      table.integer("team_id").unsigned().nullable(); // Temporarily allow NULL
-      table.timestamp("created_at").defaultTo(knex.fn.now());
-      table.timestamp("updated_at").defaultTo(knex.fn.now());
-    })
-    .then(() => {
-      return knex.schema.alterTable("players", (table) => {
-        table
-          .foreign("team_id")
-          .references("id")
-          .inTable("teams")
-          .onDelete("SET NULL");
-      });
-    });
-}
+// database/migrations/02_create_players_table.js
+exports.up = function (knex: Knex) {
+  return knex.schema.createTable("players", (table) => {
+    table.increments("id").primary();
+    table.string("name").notNullable();
+    table.string("category").defaultTo("C");
+    table.decimal("base_price", 12, 2).notNullable();
+    table.boolean("is_sold").defaultTo(false);
+    table
+      .integer("team_id")
+      .nullable()
+      .references("id")
+      .inTable("teams")
+      .onDelete("SET NULL");
+    table.timestamps(true, true);
+  });
+};
 
-export async function down(knex: Knex): Promise<void> {
-  return knex.schema.dropTable("players");
-}
+exports.down = function (knex: Knex) {
+  return knex.schema.dropTableIfExists("players");
+};

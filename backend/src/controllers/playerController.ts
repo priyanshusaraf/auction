@@ -1,31 +1,90 @@
 import { Request, Response } from "express";
-import db from "../config/database";
-
+const db = require("../config/database");
+import { Player } from "../types";
 // Get all players
 export const getAllPlayers = async (req: Request, res: Response) => {
   try {
-    const players = await db("players").select("*");
-    res.json(players);
-  } catch (error) {
-    res.status(500).json({ error: "Failed to fetch players" });
+    console.log("GET /api/players - Fetching all players");
+
+    const players = await db("players")
+      .select("*")
+      .orderBy("category")
+      .orderBy("name");
+
+    console.log(`Found ${players.length} players`);
+
+    // Map players to match the frontend expected format
+    const formattedPlayers = players.map((player: Player) => ({
+      id: player.id,
+      name: player.name,
+      category: player.category,
+      price: player.base_price,
+      sold: player.is_sold === 1,
+      teamId: player.team_id,
+    }));
+
+    res.json(formattedPlayers);
+  } catch (error: any) {
+    console.error("Error fetching players:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch players",
+      error: error.message,
+    });
   }
 };
 
 // Add a new player
 export const addPlayer = async (req: Request, res: Response) => {
   try {
-    const { name, category, base_price, team_id } = req.body;
-    const newPlayer = await db("players").insert({
+    const { name, category, price } = req.body;
+
+    if (!name || !price) {
+      return res.status(400).json({
+        success: false,
+        message: "Name and price are required fields",
+      });
+    }
+
+    // Validate category is one of the allowed enum values
+    const validCategories = ["A+", "A", "B", "C", "D"];
+    const playerCategory =
+      category && validCategories.includes(category) ? category : "C";
+
+    const newPlayer = {
       name,
-      category,
-      base_price,
-      team_id: team_id || null,
+      category: playerCategory,
+      base_price: parseInt(price, 10),
+      is_sold: 0,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+
+    // Insert and get the ID
+    const [id] = await db("players").insert(newPlayer);
+
+    // Format response to match frontend expected structure
+    const formattedPlayer = {
+      id,
+      name: newPlayer.name,
+      category: newPlayer.category,
+      price: newPlayer.base_price,
+      sold: false,
+      teamId: null,
+    };
+
+    res.status(201).json({
+      success: true,
+      message: "Player created successfully",
+      player: formattedPlayer,
     });
-    res
-      .status(201)
-      .json({ message: "Player added successfully", playerId: newPlayer[0] });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to add player" });
+  } catch (error: any) {
+    console.error("Error creating player:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create player",
+      error: error.message,
+    });
   }
 };
 

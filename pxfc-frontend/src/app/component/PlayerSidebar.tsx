@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useUser } from "@clerk/nextjs";
 import { useAuctionStore } from "@/component/AuctionLogic";
 import { Input } from "@/components/ui/input";
@@ -11,19 +11,73 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import ProfilePhotoMock from "./ProfilePhotoMock";
 import { Button } from "@/components/ui/button";
 import { Search } from "lucide-react";
 import Image from "next/image";
+import { socket } from "@/config/socketClient";
 
 export default function PlayerSidebar() {
   const { isSignedIn } = useUser();
   // Add local state for search query since it might not be properly initialized in the store
   const [searchQuery, setLocalSearchQuery] = useState("");
-  const { availablePlayers, setSearchQuery } = useAuctionStore();
+  const { availablePlayers, setSearchQuery, players } = useAuctionStore();
   const [selectedPlayer, setSelectedPlayer] = useState(null);
 
+  // Add local state to manage player availability for non-authenticated users
+  const [localAvailablePlayers, setLocalAvailablePlayers] = useState([]);
+
+  // Initialize localAvailablePlayers from store when component mounts
+  useEffect(() => {
+    if (availablePlayers && availablePlayers.length > 0) {
+      setLocalAvailablePlayers(availablePlayers);
+    } else if (players && players.length > 0) {
+      // Fallback to filtering from all players if availablePlayers is not set
+      const available = players.filter((p) => !p.sold);
+      setLocalAvailablePlayers(available);
+    }
+  }, [availablePlayers, players]);
+
+  // Listen for socket updates to update available players for non-authenticated users
+  useEffect(() => {
+    if (socket) {
+      const handleAuctionUpdate = (data) => {
+        console.log("PlayerSidebar received update:", data.type);
+
+        // Handle all update types
+        if (data.playerData) {
+          // Update local available players list based on the player's sold status
+          setLocalAvailablePlayers((prev) => {
+            if (data.type === "BID_ACCEPTED") {
+              // Remove the sold player
+              return prev.filter((p) => p.id !== data.playerData.id);
+            } else if (data.type === "PLAYER_REMOVED") {
+              // Check if the player is already in our list
+              const exists = prev.some((p) => p.id === data.playerData.id);
+              if (!exists) {
+                // Add the player back to available list
+                return [...prev, data.playerData];
+              }
+            }
+            return prev;
+          });
+        }
+      };
+
+      socket.on("auctionUpdate", handleAuctionUpdate);
+
+      return () => {
+        socket.off("auctionUpdate", handleAuctionUpdate);
+      };
+    }
+  }, []);
+
   // Get all available players and filter them based on search query
-  const allPlayers = availablePlayers || [];
+  // Use local state for non-authenticated users and store state for authenticated users
+  const allPlayers = isSignedIn
+    ? availablePlayers || []
+    : localAvailablePlayers;
+
   const filteredPlayers =
     searchQuery.trim() === ""
       ? allPlayers
@@ -88,13 +142,21 @@ export default function PlayerSidebar() {
               >
                 <div className="relative">
                   <div className="absolute inset-0 bg-gradient-to-br from-teal-500 to-cyan-400 rounded-full opacity-0 group-hover:opacity-30 transition-opacity"></div>
-                  <Image
-                    src={player.profilePhoto}
-                    alt={player.name}
-                    width={48}
-                    height={48}
-                    className="rounded-full object-cover ring-2 ring-gray-700 group-hover:ring-teal-400 transition-all"
-                  />
+                  {player.profilePhoto ? (
+                    <Image
+                      src={player.profilePhoto}
+                      alt={player.name}
+                      width={48}
+                      height={48}
+                      className="rounded-full object-cover ring-2 ring-gray-700 group-hover:ring-teal-400 transition-all"
+                    />
+                  ) : (
+                    <ProfilePhotoMock
+                      name={player.name}
+                      size={48}
+                      className="ring-2 ring-gray-700 group-hover:ring-teal-400 transition-all"
+                    />
+                  )}
                 </div>
                 <div className="flex-1 overflow-hidden">
                   <p className="font-medium text-gray-200 truncate group-hover:text-teal-300 transition-colors">
@@ -137,13 +199,21 @@ export default function PlayerSidebar() {
                 <DialogTitle className="flex items-center gap-4">
                   <div className="relative">
                     <div className="absolute inset-0 bg-gradient-to-br from-teal-500 to-cyan-400 rounded-full opacity-30"></div>
-                    <Image
-                      src={selectedPlayer.profilePhoto}
-                      alt={selectedPlayer.name}
-                      width={64}
-                      height={64}
-                      className="rounded-full object-cover ring-2 ring-teal-500"
-                    />
+                    {selectedPlayer.profilePhoto ? (
+                      <Image
+                        src={selectedPlayer.profilePhoto}
+                        alt={selectedPlayer.name}
+                        width={64}
+                        height={64}
+                        className="rounded-full object-cover ring-2 ring-teal-500"
+                      />
+                    ) : (
+                      <ProfilePhotoMock
+                        name={selectedPlayer.name}
+                        size={64}
+                        className="ring-2 ring-teal-500"
+                      />
+                    )}
                   </div>
                   <div>
                     <h3 className="text-xl font-bold bg-gradient-to-r from-teal-400 to-cyan-300 bg-clip-text text-transparent">
