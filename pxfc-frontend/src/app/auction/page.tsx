@@ -15,11 +15,7 @@ export default function AuctionPage() {
       <div className="absolute top-4 right-4">
         {isSignedIn && <UserButton />}
       </div>
-
-      {/* Sidebar with Player List */}
       <PlayerSidebar isAuthenticated={isSignedIn} />
-
-      {/* Main Auction Area */}
       <div className="flex-1 p-6">
         <h1 className="text-2xl font-bold mb-4">Teams</h1>
 
