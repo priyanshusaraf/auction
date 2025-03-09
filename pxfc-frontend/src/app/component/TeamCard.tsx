@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useUser } from "@clerk/nextjs";
 import { useAuctionStore } from "@/component/AuctionLogic";
 import PlayerCard from "./PlayerCard";
@@ -16,17 +16,47 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { motion } from "framer-motion";
 import { Loader, Coins, UserRound, AlertCircle } from "lucide-react";
+import { socket } from "@/config/socketClient";
+import axios from "axios";
+import { toast } from "react-hot-toast";
 
 export default function TeamCard({ team }) {
-  const { isSignedIn } = useUser();
-  const addPlayerToTeam = useAuctionStore((state) => state.addPlayerToTeam);
-  const removePlayerFromTeam = useAuctionStore(
-    (state) => state.removePlayerFromTeam
-  );
+  const { isSignedIn, user } = useUser();
+
+  // Get all players from the store
+  const players = useAuctionStore((state) => state.players);
+  const {
+    addPlayerToTeam,
+    removePlayerFromTeam,
+    updateTeamData,
+    markPlayerAsSold,
+  } = useAuctionStore((state) => state);
+
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [bidPrice, setBidPrice] = useState("");
   const [error, setError] = useState("");
   const [isDropActive, setIsDropActive] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const API_URL = "http://localhost:5000/";
+
+  useEffect(() => {
+    // Listen for auction updates from the server
+    socket.on("auctionUpdate", (updateData) => {
+      if (updateData.type === "BID_ACCEPTED") {
+        // Update local state with the latest team data
+        updateTeamData(updateData.teamData);
+
+        // Mark the player as sold
+        if (updateData.playerData) {
+          markPlayerAsSold(updateData.playerData.id, updateData.teamData.id);
+        }
+      }
+    });
+
+    return () => {
+      socket.off("auctionUpdate");
+    };
+  }, [updateTeamData, markPlayerAsSold]);
 
   if (!team) {
     return (
@@ -37,9 +67,16 @@ export default function TeamCard({ team }) {
     );
   }
 
+  // Ensure team has a players array
+  if (!team.players) {
+    team.players = [];
+  }
+
   const handleDragOver = (e) => {
     if (!isSignedIn) return;
     e.preventDefault();
+    // Specify the drop effect for visual feedback
+    e.dataTransfer.dropEffect = "move";
     setIsDropActive(true);
   };
 
@@ -52,19 +89,33 @@ export default function TeamCard({ team }) {
 
     e.preventDefault();
     setIsDropActive(false);
-    const playerId = e.dataTransfer.getData("playerId");
 
-    const player = useAuctionStore
-      .getState()
-      .players.find((p) => p.id === playerId);
-    if (!player) return;
+    // Get the player ID from the data transfer
+    const playerId = e.dataTransfer.getData("playerId");
+    if (!playerId) {
+      console.error("No player ID found in drag data");
+      return;
+    }
+
+    // Find the player from the players array in the store
+    const player = players.find((p) => p.id === playerId);
+    if (!player) {
+      console.error("Player not found:", playerId);
+      return;
+    }
+
+    // Check if player is already sold
+    if (player.sold) {
+      toast.error("This player has already been sold");
+      return;
+    }
 
     setSelectedPlayer(player);
     setBidPrice(player.price.toString());
     setError("");
   };
 
-  const confirmBid = () => {
+  const confirmBid = async () => {
     const bid = parseInt(bidPrice, 10);
 
     if (isNaN(bid) || bid <= 0) {
@@ -82,12 +133,38 @@ export default function TeamCard({ team }) {
       return;
     }
 
-    addPlayerToTeam(team.id, selectedPlayer.id, bid);
-    closeModal();
+    try {
+      setIsSubmitting(true);
+
+      // Send bid to the server
+      const response = await axios.post(`${API_URL}/auction/bid`, {
+        teamId: team.id,
+        playerId: selectedPlayer.id,
+        bidAmount: bid,
+        userId: user?.id,
+      });
+
+      // If successful, update the local state
+      if (response.data.success) {
+        // The socket will handle the real-time update
+        toast.success(`Bid accepted for ${selectedPlayer.name}`);
+      } else {
+        toast.error(response.data.message || "Failed to place bid");
+        setError(response.data.message || "Failed to place bid");
+      }
+    } catch (error) {
+      console.error("Bid error:", error);
+      const errorMsg = error.response?.data?.message || "Error placing bid";
+      toast.error(errorMsg);
+      setError(errorMsg);
+    } finally {
+      setIsSubmitting(false);
+      closeModal();
+    }
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !error) {
+    if (e.key === "Enter" && !error && !isSubmitting) {
       confirmBid();
     }
   };
@@ -99,7 +176,9 @@ export default function TeamCard({ team }) {
   };
 
   const calculateSpent = () => {
-    // Ensure all players have a bidAmount property
+    // Check if team.players exists before using reduce
+    if (!team.players) return 0;
+
     return team.players.reduce((total, player) => {
       // Use bidAmount if it exists, otherwise fall back to player.price
       const amount = player.bidAmount || player.price || 0;
@@ -130,7 +209,7 @@ export default function TeamCard({ team }) {
         }`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
-        onDrop={isSignedIn ? handleDrop : undefined}
+        onDrop={handleDrop}
         style={{
           transform: isDropActive ? "scale(1.02)" : "scale(1)",
         }}
@@ -146,7 +225,7 @@ export default function TeamCard({ team }) {
           <div className="bg-blue-50 px-3 py-1 rounded-full flex items-center">
             <Coins className="text-blue-500 mr-1" size={16} />
             <span className="text-blue-700 font-medium">
-              {team.budget.toLocaleString()}
+              {(team.budget || 0).toLocaleString()}
             </span>
           </div>
         </div>
@@ -178,7 +257,7 @@ export default function TeamCard({ team }) {
         </div>
 
         {/* Drop Zone Indicator when empty */}
-        {team.players.length === 0 && (
+        {team.players && team.players.length === 0 && (
           <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center my-4 bg-gray-50">
             <motion.div
               animate={{ y: [0, -5, 0] }}
@@ -195,10 +274,10 @@ export default function TeamCard({ team }) {
 
         {/* Player List with animations */}
         <div className="mt-4 space-y-3">
-          {team.players.length > 0
+          {team.players && team.players.length > 0
             ? team.players.map((player, index) => (
                 <motion.div
-                  key={player.id}
+                  key={player.id || index}
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: index * 0.1 }}
@@ -209,6 +288,7 @@ export default function TeamCard({ team }) {
                     onRemove={() =>
                       isSignedIn && removePlayerFromTeam(team.id, player.id)
                     }
+                    isReadOnly={!isSignedIn}
                   />
                 </motion.div>
               ))
@@ -253,8 +333,9 @@ export default function TeamCard({ team }) {
                   ? "border-red-400 focus:ring-red-400"
                   : "focus:ring-blue-400"
               }`}
-              placeholder={`Min: ${selectedPlayer?.price}`}
+              placeholder={selectedPlayer ? `Min: ${selectedPlayer.price}` : ""}
               autoFocus
+              disabled={isSubmitting}
             />
             {error && (
               <motion.p
@@ -271,7 +352,7 @@ export default function TeamCard({ team }) {
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500">Team Budget:</span>
                 <span className="font-medium">
-                  {team.budget.toLocaleString()}
+                  {(team.budget || 0).toLocaleString()}
                 </span>
               </div>
             </div>
@@ -283,16 +364,24 @@ export default function TeamCard({ team }) {
               variant="outline"
               onClick={closeModal}
               className="border-gray-300"
+              disabled={isSubmitting}
             >
               Cancel
             </Button>
             <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
               <Button
                 onClick={confirmBid}
-                disabled={!!error || !bidPrice}
+                disabled={!!error || !bidPrice || isSubmitting}
                 className="bg-blue-600 hover:bg-blue-700"
               >
-                Confirm Bid
+                {isSubmitting ? (
+                  <>
+                    <Loader className="animate-spin mr-2" size={16} />
+                    Processing...
+                  </>
+                ) : (
+                  "Confirm Bid"
+                )}
               </Button>
             </motion.div>
           </div>

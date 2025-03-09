@@ -1,4 +1,3 @@
-// components/PlayerCard.tsx
 import { Player } from "@/types";
 import { X, Lock } from "lucide-react";
 
@@ -16,12 +15,25 @@ export default function PlayerCard({
   // Display bid amount if available, otherwise display base price
   const displayAmount = player.bidAmount || player.price;
 
+  // Add drag start handler
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
+    if (isReadOnly || player.sold) return;
+
+    // Set the player ID in the data transfer
+    e.dataTransfer.setData("playerId", player.id);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
   return (
     <div
+      draggable={!isReadOnly && !player.sold}
+      onDragStart={handleDragStart}
       className={`flex justify-between items-center p-3 bg-white border rounded-md transition-all ${
         isReadOnly
           ? "border-gray-100 shadow-sm"
-          : "border-gray-200 shadow-sm hover:shadow-md"
+          : player.sold
+          ? "border-gray-100 shadow-sm opacity-70 cursor-not-allowed"
+          : "border-gray-200 shadow-sm hover:shadow-md cursor-grab"
       }`}
     >
       <div className="flex flex-col">

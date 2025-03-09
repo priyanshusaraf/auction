@@ -1,37 +1,67 @@
 "use client";
 
-import { useUser, UserButton } from "@clerk/nextjs";
+import { useEffect } from "react";
 import { useAuctionStore } from "@/component/AuctionLogic";
-import PlayerSidebar from "@/component/PlayerSidebar";
 import TeamCard from "@/component/TeamCard";
+import PlayerSidebar from "@/component/PlayerSidebar";
+import { socket } from "@/config/socketClient";
+import { Toaster } from "react-hot-toast";
 
 export default function AuctionPage() {
-  const { isSignedIn } = useUser();
-  const { teams } = useAuctionStore(); // Ensure teams are fetched
+  const { teams, players, loading, error, fetchInitialData, setSearchQuery } =
+    useAuctionStore((state) => state);
+
+  useEffect(() => {
+    // Load initial data from server
+    fetchInitialData();
+
+    // Ensure socket is connected
+    if (!socket.connected) {
+      socket.connect();
+    }
+
+    // Clean up on unmount
+    return () => {
+      // Don't disconnect socket here as we want to keep it active across page navigation
+    };
+  }, [fetchInitialData]);
+
+  // Update the store with the available players
+  useEffect(() => {
+    if (players && players.length > 0) {
+      // Filter out sold players for the available players list
+      const availablePlayers = players.filter((player) => !player.sold);
+
+      // Update the availablePlayers in the store
+      useAuctionStore.setState({ availablePlayers });
+    }
+  }, [players]);
+
+  if (loading) {
+    return <div className="p-10 text-center">Loading auction data...</div>;
+  }
+
+  if (error) {
+    return <div className="p-10 text-center text-red-500">Error: {error}</div>;
+  }
 
   return (
-    <div className="flex h-screen bg-gray-100">
-      {/* Logout Button */}
-      <div className="absolute top-4 right-4">
-        {isSignedIn && <UserButton />}
-      </div>
-      <PlayerSidebar isAuthenticated={isSignedIn} />
-      <div className="flex-1 p-6">
-        <h1 className="text-2xl font-bold mb-4">Teams</h1>
+    <div className="flex h-screen">
+      <Toaster position="top-right" />
 
-        {/* Ensure teams are mapped correctly */}
-        <div className="grid grid-cols-3 gap-4">
-          {Array.isArray(teams) && teams.length > 0 ? (
-            teams.map((team) => (
-              <TeamCard
-                key={team.id}
-                team={team}
-                isAuthenticated={isSignedIn}
-              />
-            ))
-          ) : (
-            <p className="text-gray-500 italic">No teams available.</p>
-          )}
+      {/* Use PlayerSidebar instead of PlayersList */}
+      <PlayerSidebar />
+
+      <div className="flex-1 p-8 overflow-y-auto">
+        <h1 className="text-3xl font-bold mb-6 bg-gradient-to-r from-teal-400 to-cyan-300 bg-clip-text text-transparent">
+          Player Auction
+        </h1>
+
+        <h2 className="text-xl font-semibold mb-4 text-gray-200">Teams</h2>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {teams.map((team) => (
+            <TeamCard key={team.id} team={team} />
+          ))}
         </div>
       </div>
     </div>

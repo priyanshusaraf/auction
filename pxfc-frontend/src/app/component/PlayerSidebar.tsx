@@ -17,11 +17,13 @@ import Image from "next/image";
 
 export default function PlayerSidebar() {
   const { isSignedIn } = useUser();
-  const { searchQuery, setSearchQuery, availablePlayers } = useAuctionStore();
+  // Add local state for search query since it might not be properly initialized in the store
+  const [searchQuery, setLocalSearchQuery] = useState("");
+  const { availablePlayers, setSearchQuery } = useAuctionStore();
   const [selectedPlayer, setSelectedPlayer] = useState(null);
 
   // Get all available players and filter them based on search query
-  const allPlayers = availablePlayers();
+  const allPlayers = availablePlayers || [];
   const filteredPlayers =
     searchQuery.trim() === ""
       ? allPlayers
@@ -37,7 +39,12 @@ export default function PlayerSidebar() {
 
   // Handle search input change
   const handleSearchChange = (e) => {
-    setSearchQuery(e.target.value);
+    const value = e.target.value;
+    setLocalSearchQuery(value);
+    // Update the global state if setSearchQuery is available
+    if (setSearchQuery) {
+      setSearchQuery(value);
+    }
   };
 
   return (

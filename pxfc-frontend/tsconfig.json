@@ -18,7 +18,9 @@
       "@/*": ["./src/*"],
       "@/component/*": ["./src/app/component/*"],
       "@/lib/*": ["./src/lib/*"],
-      "@/types/*": ["./src/types/*"]
+      "@/types/*": ["./src/types/*"],
+      "@/data/*": ["./src/app/data/*"],
+      "@/config/*": ["./src/app/config/*"]
     },
     "plugins": [
       {
