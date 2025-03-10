@@ -1,14 +1,22 @@
 // auction/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useUser } from "@clerk/nextjs";
 import { useAuctionStore } from "@/component/AuctionLogic";
 import TeamCard from "@/component/TeamCard";
 import PlayerSidebar from "@/component/PlayerSidebar";
-import { socket, connectSocket } from "@/config/socketClient";
+import {
+  socket,
+  connectSocket,
+  forceReconnect,
+  isSocketConnected,
+} from "@/config/socketClient";
 import { Toaster } from "react-hot-toast";
-import { Sun, Moon } from "lucide-react";
+import { Sun, Moon, RefreshCw, Wifi, WifiOff } from "lucide-react";
+import { toast } from "react-hot-toast";
+// Import the diagnostic function - uncomment if you create this file
+// import { diagnoseSocketIssues } from "../lib/socket-diagnostic";
 
 export default function AuctionPage() {
   const { isSignedIn } = useUser();
@@ -26,6 +34,7 @@ export default function AuctionPage() {
   const [localTeams, setLocalTeams] = useState([]);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [darkMode, setDarkMode] = useState(false);
+  const [socketStatus, setSocketStatus] = useState("disconnected");
 
   // Initialize with data from store
   useEffect(() => {
@@ -34,16 +43,61 @@ export default function AuctionPage() {
     }
   }, [teams]);
 
+  // Initialize data and socket connection
   useEffect(() => {
     // Load initial data from server
     fetchInitialData();
 
-    // Ensure socket is connected
-    connectSocket();
+    // For debugging: Diagnose socket connection issues
+    // Comment this out in production
+    // diagnoseSocketIssues();
+
+    // Initial socket connection
+    if (!socket) {
+      console.error("Socket not available - check your socketClient.ts file");
+    } else {
+      console.log("Setting up socket in AuctionPage");
+      connectSocket();
+
+      // Set initial status
+      setSocketStatus(socket.connected ? "connected" : "disconnected");
+
+      // Setup event handlers
+      const handleConnect = () => {
+        console.log("Socket connected event in AuctionPage");
+        setSocketStatus("connected");
+      };
+
+      const handleDisconnect = () => {
+        console.log("Socket disconnected event in AuctionPage");
+        setSocketStatus("disconnected");
+      };
+
+      socket.on("connect", handleConnect);
+      socket.on("disconnect", handleDisconnect);
+
+      // Setup periodic status check
+      const statusCheckInterval = setInterval(() => {
+        const currentStatus = isSocketConnected()
+          ? "connected"
+          : "disconnected";
+        if (currentStatus !== socketStatus) {
+          setSocketStatus(currentStatus);
+        }
+      }, 5000);
+
+      return () => {
+        socket.off("connect", handleConnect);
+        socket.off("disconnect", handleDisconnect);
+        clearInterval(statusCheckInterval);
+      };
+    }
   }, [fetchInitialData]);
 
   // Handle socket updates
   useEffect(() => {
+    if (!socket) return;
+
     const handleAuctionUpdate = (data) => {
       console.log("Socket update received in AuctionPage:", data);
       setLastUpdate(new Date().toISOString());
@@ -61,8 +115,7 @@ export default function AuctionPage() {
         }
       }
 
-      // For player updates - we only update the store, not local state
-      // PlayerSidebar will handle its own local state management
+      // For player updates - we only update the store if authenticated
       if (data.playerData && isSignedIn) {
         if (data.type === "BID_ACCEPTED") {
           markPlayerAsSold(
@@ -111,7 +164,18 @@ export default function AuctionPage() {
     }
   };
 
-  // Effect to initialize dark mode from localstorage
+  // Force socket reconnection
+  const handleReconnect = () => {
+    toast.success("Attempting to reconnect...");
+    forceReconnect();
+
+    // Update status after a delay
+    setTimeout(() => {
+      setSocketStatus(isSocketConnected() ? "connected" : "disconnected");
+    }, 2000);
+  };
+
+  // Effect to initialize dark mode from localStorage
   useEffect(() => {
     if (typeof window !== "undefined") {
       const savedMode = localStorage.getItem("darkMode") === "true";
@@ -167,27 +231,73 @@ export default function AuctionPage() {
             Player Auction
           </h1>
 
-          {/* Dark Mode Toggle Button */}
-          <button
-            onClick={toggleDarkMode}
-            className={`p-2 rounded-full ${
-              darkMode
-                ? "bg-gray-700 hover:bg-gray-600"
-                : "bg-gray-200 hover:bg-gray-300"
-            } transition-colors duration-200`}
-            title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
-          >
-            {darkMode ? (
-              <Sun size={20} className="text-yellow-300" />
-            ) : (
-              <Moon size={20} className="text-blue-700" />
-            )}
-          </button>
+          <div className="flex items-center space-x-2">
+            {/* Connection Status Indicator */}
+            <div className="flex items-center">
+              {socketStatus === "connected" ? (
+                <Wifi
+                  size={18}
+                  className={`${
+                    darkMode ? "text-green-400" : "text-green-500"
+                  } mr-2`}
+                />
+              ) : (
+                <WifiOff
+                  size={18}
+                  className={`${
+                    darkMode ? "text-red-400" : "text-red-500"
+                  } mr-2`}
+                />
+              )}
+
+              <span
+                className={`text-xs ${
+                  darkMode ? "text-gray-300" : "text-gray-600"
+                }`}
+              >
+                {socketStatus === "connected" ? "Live" : "Offline"}
+              </span>
+
+              {socketStatus === "disconnected" && (
+                <button
+                  onClick={handleReconnect}
+                  className={`ml-2 p-1.5 rounded-full ${
+                    darkMode
+                      ? "bg-gray-700 hover:bg-gray-600"
+                      : "bg-gray-200 hover:bg-gray-300"
+                  }`}
+                  title="Reconnect"
+                >
+                  <RefreshCw
+                    size={14}
+                    className={darkMode ? "text-gray-300" : "text-gray-600"}
+                  />
+                </button>
+              )}
+            </div>
+
+            {/* Dark Mode Toggle Button */}
+            <button
+              onClick={toggleDarkMode}
+              className={`p-2 rounded-full ${
+                darkMode
+                  ? "bg-gray-700 hover:bg-gray-600"
+                  : "bg-gray-200 hover:bg-gray-300"
+              } transition-colors duration-200`}
+              title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+            >
+              {darkMode ? (
+                <Sun size={20} className="text-yellow-300" />
+              ) : (
+                <Moon size={20} className="text-blue-700" />
+              )}
+            </button>
+          </div>
         </div>
 
         <h2
           className={`text-xl font-semibold mb-4 ${
-            darkMode ? "text-gray-200" : "text-gray-200"
+            darkMode ? "text-gray-200" : "text-gray-600"
           }`}
         >
           Teams
@@ -200,12 +310,15 @@ export default function AuctionPage() {
         </div>
 
         {/* Socket status indicator */}
-        {/* <div className="fixed bottom-4 right-4 bg-black bg-opacity-70 text-white p-2 rounded text-xs z-10">
-          Socket: {socket.connected ? "Connected" : "Disconnected"}
-          <br />
-          Last Update:{" "}
-          {lastUpdate ? new Date(lastUpdate).toLocaleTimeString() : "None"}
-        </div> */}
+        {lastUpdate && (
+          <div
+            className={`fixed bottom-4 right-4 ${
+              darkMode ? "bg-gray-800" : "bg-black"
+            } bg-opacity-70 text-white p-2 rounded text-xs z-10`}
+          >
+            Last Update: {new Date(lastUpdate).toLocaleTimeString()}
+          </div>
+        )}
       </div>
     </div>
   );

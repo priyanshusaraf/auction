@@ -1,155 +1,106 @@
 // src/config/socketClient.ts
-import { io } from "socket.io-client";
 
-// Create a more robust socket client with proper debugging
-const getSocketURL = () => {
-  // Make sure we're using the correct base URL
-  const url = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
-  console.log("Socket connecting to:", url);
-  return url;
-};
+import { io, Socket } from "socket.io-client";
+import { toast } from "react-hot-toast";
 
-// Export this for debugging purposes
-export const SOCKET_URL = getSocketURL();
+// Simple fixed version that avoids namespace issues
+let socketInstance: Socket | null = null;
 
-// Create socket instance with more debugging
-export const socket = io(SOCKET_URL, {
-  transports: ["websocket", "polling"], // Try websocket first, fallback to polling
-  reconnectionAttempts: 10,
-  reconnectionDelay: 1000,
-  timeout: 20000, // Increase timeout to 20 seconds
-  autoConnect: true,
-  path: "/socket.io",
-  query: {
-    client: "web",
-    timestamp: Date.now().toString(),
-  },
-});
+const initSocket = () => {
+  // CRUCIAL FIX: Make sure the URL doesn't have any path components which can be interpreted as a namespace
+  let baseUrl;
 
-// Detailed socket event tracking
-const socketDebug = (event, ...args) => {
-  console.log(
-    `%c[Socket] ${event}`,
-    "background: #333; color: #bada55",
-    ...args
-  );
-};
+  if (typeof window !== "undefined") {
+    if (process.env.NEXT_PUBLIC_API_URL) {
+      // Extract only the origin part to avoid namespace issues
+      try {
+        const url = new URL(process.env.NEXT_PUBLIC_API_URL);
+        baseUrl = url.origin; // This gets just http://hostname:port without any path
+      } catch (e) {
+        baseUrl = process.env.NEXT_PUBLIC_API_URL;
+      }
+    } else {
+      baseUrl = window.location.origin;
+    }
+  } else {
+    baseUrl = "http://localhost:5000"; // Default during SSR
+  }
 
-// Configure socket event handlers with detailed logging
-socket.on("connect", () => {
-  socketDebug("Connected", socket.id);
+  console.log("Socket connecting to:", baseUrl);
 
-  // Emit a ping to test bidirectional communication
-  socket.emit("ping", { timestamp: Date.now() });
-});
-
-socket.on("pong", (data) => {
-  socketDebug("Received pong", data);
-});
-
-socket.on("connect_error", (error) => {
-  socketDebug("Connection Error", error);
-});
-
-socket.on("disconnect", (reason) => {
-  socketDebug("Disconnected", reason);
-});
-
-socket.on("reconnect_attempt", (attemptNumber) => {
-  socketDebug("Reconnection attempt", attemptNumber);
-});
-
-socket.on("reconnect", (attemptNumber) => {
-  socketDebug("Reconnected", attemptNumber);
-});
-
-socket.on("error", (error) => {
-  socketDebug("Socket Error", error);
-});
-
-// We'll add a specific listener for auction updates with detailed logging
-socket.on("auctionUpdate", (data) => {
-  socketDebug("Auction Update Received", {
-    type: data.type,
-    timestamp: data.timestamp,
-    teamId: data.teamData?.id,
-    playerId: data.playerData?.id,
-    payload: data,
+  // Create the socket with the correct configuration
+  // path: "/socket.io" is standard - only change if your server uses a different path
+  const socket = io(baseUrl, {
+    transports: ["websocket", "polling"],
+    path: "/socket.io", // Standard Socket.IO path
+    reconnectionAttempts: 5,
+    reconnectionDelay: 1000,
+    timeout: 20000,
   });
 
-  // Check for data issues
-  if (!data.teamData && !data.playerData) {
-    console.warn("Received auctionUpdate with no team or player data");
-  }
-  if (data.teamData && typeof data.teamData.budget !== "number") {
-    console.warn("Team budget is not a number:", data.teamData.budget);
-  }
-  if (
-    data.playerData &&
-    typeof data.playerData.bidAmount !== "number" &&
-    data.playerData.bidAmount !== undefined
-  ) {
-    console.warn(
-      "Player bidAmount is not a number:",
-      data.playerData.bidAmount
-    );
-  }
-});
+  // Set up event handlers
+  socket.on("connect", () => {
+    console.log("Socket connected:", socket.id);
+    toast.success("Live updates connected");
+  });
 
-/**
- * Connect socket with health check
- */
+  socket.on("disconnect", (reason) => {
+    console.log("Socket disconnected:", reason);
+    toast.error("Live updates disconnected");
+  });
+
+  socket.on("connect_error", (error) => {
+    console.error("Socket connection error:", error.message);
+  });
+
+  return socket;
+};
+
+// Get or create the socket
+export const getSocket = (): Socket | null => {
+  if (!socketInstance) {
+    try {
+      socketInstance = initSocket();
+    } catch (err) {
+      console.error("Failed to initialize socket:", err);
+      return null;
+    }
+  }
+  return socketInstance;
+};
+
+// Explicitly initialize socket as early as possible
+if (typeof window !== "undefined") {
+  getSocket();
+}
+
+// Export the socket instance
+export const socket = typeof window !== "undefined" ? getSocket() : null;
+
+// Connect socket
 export const connectSocket = (): void => {
-  socketDebug("Attempting connection");
-
-  if (!socket.connected) {
-    socket.connect();
-
-    // Schedule health check after connecting
-    setTimeout(() => {
-      if (socket.connected) {
-        socketDebug("Socket health check: Connected");
-        socket.emit("ping", { timestamp: Date.now() });
-      } else {
-        socketDebug("Socket health check: Not connected");
-        // Try to reconnect
-        socket.connect();
-      }
-    }, 2000);
-  } else {
-    socketDebug("Already connected");
-    // Send health check ping
-    socket.emit("ping", { timestamp: Date.now() });
+  const s = getSocket();
+  if (s && !s.connected) {
+    console.log("Connecting socket...");
+    s.connect();
   }
 };
 
-/**
- * Force reconnect the socket
- */
+// Force reconnect
 export const forceReconnect = (): void => {
-  socketDebug("Force reconnecting");
+  const s = getSocket();
+  if (!s) return;
 
-  // Properly close and reconnect
-  if (socket.connected) socket.disconnect();
+  if (s.connected) s.disconnect();
 
-  // Small delay to ensure clean disconnect
   setTimeout(() => {
-    socket.connect();
-    socketDebug("Reconnection initiated");
-  }, 500);
+    s.connect();
+  }, 300);
 };
 
-// Add a health check to test if both socket connection and event flow are working
-export const testSocketConnection = () => {
-  if (!socket.connected) {
-    socketDebug("Socket not connected. Attempting to connect...");
-    socket.connect();
-    return false;
-  }
-
-  socketDebug("Testing connection with ping...");
-  socket.emit("ping", { timestamp: Date.now() });
-  return true;
+// Check if socket is connected
+export const isSocketConnected = (): boolean => {
+  return socketInstance?.connected || false;
 };
 
 export default socket;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useUser } from "@clerk/nextjs";
 import { useAuctionStore } from "@/component/AuctionLogic";
 import PlayerCard from "./PlayerCard";
@@ -25,12 +25,22 @@ import {
   Shield,
   RefreshCw,
 } from "lucide-react";
-import { socket, connectSocket, forceReconnect } from "@/config/socketClient";
+import { socket, connectSocket } from "@/config/socketClient";
 import { toast } from "react-hot-toast";
+
+// Use a counter that doesn't reset on hydration
+let uniqueIdCounter = 0;
+const getUniqueId = () => `dynamic-id-${uniqueIdCounter++}`;
 
 export default function TeamCard({ team, darkMode = false }) {
   const { isSignedIn, user } = useUser();
   const socketRef = useRef(socket);
+
+  // Initialize the client-side state - Fix hydration mismatch by not setting values during SSR
+  const [isClient, setIsClient] = useState(false);
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
 
   // Get all players and store functions
   const players = useAuctionStore((state) => state.players);
@@ -39,7 +49,7 @@ export default function TeamCard({ team, darkMode = false }) {
     removePlayerFromTeam,
     updateTeamData,
     markPlayerAsSold,
-  } = useAuctionStore((state) => state);
+  } = useAuctionStore();
 
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [bidPrice, setBidPrice] = useState("");
@@ -49,26 +59,54 @@ export default function TeamCard({ team, darkMode = false }) {
   const [localTeamPlayers, setLocalTeamPlayers] = useState([]);
   const [localTeamBudget, setLocalTeamBudget] = useState(0);
   const [initialBudget, setInitialBudget] = useState(0);
-  const [socketStatus, setSocketStatus] = useState("connected"); // Default to connected to fix the UI
+  const [socketStatus, setSocketStatus] = useState("connected");
   const [lastUpdate, setLastUpdate] = useState(null);
   const [showStats, setShowStats] = useState(false);
+  const [socketDebug, setSocketDebug] = useState([]);
+
+  // Process team data to ensure stable IDs - avoiding Date.now() and Math.random()
+  const processTeamPlayers = useCallback((players = []) => {
+    if (!Array.isArray(players)) return [];
+    return players.map((player, index) => ({
+      ...player,
+      id: player.id ? player.id.toString() : undefined,
+      // Use stable ID assignment that's consistent between server and client
+      uniqueKey: player.id ? `player-${player.id}` : `player-static-${index}`
+    }));
+  }, []);
 
   // Update local state when team prop changes
   useEffect(() => {
     if (!team) return;
-
+    
+    // Only run on client to avoid hydration mismatch
+    if (typeof window === 'undefined') return;
+    
     // Use initial_budget from the backend if available
-    const availableBudget = parseFloat(team.budget) || 0;
-    const totalInitialBudget = parseFloat(team.initial_budget) || 650000;
+    const availableBudget = parseFloat(String(team.budget)) || 0;
+    const totalInitialBudget = parseFloat(String(team.initial_budget)) || 650000;
 
-    // Update local state
-    setLocalTeamPlayers(team.players || []);
+    // Process player data with stable keys
+    const processedPlayers = processTeamPlayers(team.players || []);
+    
+    // Remove any duplicates by ID
+    const uniquePlayers = [...new Map(processedPlayers.map(player => 
+      [player.id, player]
+    )).values()];
+    
+    // Update local state with deduped array
+    setLocalTeamPlayers(uniquePlayers);
     setLocalTeamBudget(availableBudget);
     setInitialBudget(totalInitialBudget);
-  }, [team]);
+    
+  }, [team, processTeamPlayers]);
 
-  // Track socket connection status
+  // Track socket connection status - client-side only
   useEffect(() => {
+    // Skip during SSR
+    if (typeof window === 'undefined') return;
+    if (!socketRef.current) return;
+    
     const handleConnect = () => {
       setSocketStatus("connected");
     };
@@ -88,56 +126,108 @@ export default function TeamCard({ team, darkMode = false }) {
     socketRef.current.on("disconnect", handleDisconnect);
 
     return () => {
-      socketRef.current.off("connect", handleConnect);
-      socketRef.current.off("disconnect", handleDisconnect);
+      if (socketRef.current) {
+        socketRef.current.off("connect", handleConnect);
+        socketRef.current.off("disconnect", handleDisconnect);
+      }
     };
   }, []);
 
-  // Handle socket updates
+  // Handle socket updates for this specific team - client-side only
   useEffect(() => {
-    if (!socket || !team) return;
+    // Skip during SSR
+    if (typeof window === 'undefined') return;
+    if (!socketRef.current || !team?.id) return;
 
     const handleUpdate = (data) => {
-      console.log("Socket update received in TeamCard:", data);
-
+      // Log the update for debugging
+      console.log(`[TeamCard ${team.id}] Socket update:`, data);
+      
+      // Add to debug log
+      setSocketDebug(prev => [...prev.slice(-4), { 
+        time: new Date().toLocaleTimeString(),
+        type: data.type,
+        hasTeamData: !!data.teamData,
+        hasPlayerData: !!data.playerData
+      }]);
+      
       // Track when we received the update
       setLastUpdate(new Date().toISOString());
 
-      // Check if this update is for our team
+      // For BID_ACCEPTED and team matches the one in playerData
+      if (data.type === "BID_ACCEPTED" && data.playerData?.teamId === team.id) {
+        // Directly add the player to our team if not already there
+        setLocalTeamPlayers(prevPlayers => {
+          // Check if player already exists
+          const exists = prevPlayers.some(p => p.id === data.playerData.id);
+          if (exists) return prevPlayers;
+          
+          // Generate a stable ID
+          const newId = getUniqueId();
+          
+          // Add player with stable key
+          return [...prevPlayers, {
+            ...data.playerData,
+            uniqueKey: `player-${data.playerData.id}-${newId}`
+          }];
+        });
+        
+        // Update local budget
+        if (data.playerData.bidAmount) {
+          setLocalTeamBudget(prev => prev - parseFloat(String(data.playerData.bidAmount)));
+        }
+      }
+      
+      // For PLAYER_REMOVED and player was in this team
+      if (data.type === "PLAYER_REMOVED" && 
+          data.playerData && 
+          localTeamPlayers.some(p => p.id === data.playerData.id)) {
+        
+        // Find player to get bid amount
+        const player = localTeamPlayers.find(p => p.id === data.playerData.id);
+        const bidAmount = player ? parseFloat(String(player.bidAmount || player.price)) : 0;
+        
+        // Remove player
+        setLocalTeamPlayers(prev => prev.filter(p => p.id !== data.playerData.id));
+        
+        // Restore budget
+        setLocalTeamBudget(prev => prev + bidAmount);
+      }
+
+      // Check if this update contains team data for our team
       if (data.teamData && data.teamData.id === team.id) {
-        console.log("Applying update to team:", team.name);
-
-        // IMPORTANT: Always update local state regardless of auth status
-        if (data.teamData.players) {
-          setLocalTeamPlayers(data.teamData.players);
-        }
-
+        console.log(`[TeamCard ${team.id}] Updating from team data:`, data.teamData);
+        
+        // Update the budget if provided
         if (data.teamData.budget !== undefined) {
-          setLocalTeamBudget(parseFloat(data.teamData.budget));
+          setLocalTeamBudget(parseFloat(String(data.teamData.budget)));
+        }
+        
+        // Update team players if provided
+        if (data.teamData.players && Array.isArray(data.teamData.players)) {
+          // Process players with stable keys - avoid Date.now()
+          const updatedPlayers = processTeamPlayers(data.teamData.players);
+          
+          // Set the updated players list
+          setLocalTeamPlayers(updatedPlayers);
         }
 
-        // Only update global state if authenticated
+        // Update global store if authenticated
         if (isSignedIn) {
           updateTeamData(data.teamData);
         }
       }
-
-      // Handle player updates - these might affect any team if a player was moved
-      if (data.playerData && isSignedIn) {
-        markPlayerAsSold(
-          data.playerData.id,
-          data.playerData.teamId,
-          data.playerData.bidAmount
-        );
-      }
     };
 
-    socket.on("auctionUpdate", handleUpdate);
+    // Listen for auction updates
+    socketRef.current.on("auctionUpdate", handleUpdate);
 
     return () => {
-      socket.off("auctionUpdate", handleUpdate);
+      if (socketRef.current) {
+        socketRef.current.off("auctionUpdate", handleUpdate);
+      }
     };
-  }, [team?.id, isSignedIn, updateTeamData, markPlayerAsSold]);
+  }, [team?.id, isSignedIn, updateTeamData, localTeamPlayers, processTeamPlayers]);
 
   if (!team) {
     return (
@@ -183,6 +273,12 @@ export default function TeamCard({ team, darkMode = false }) {
       return;
     }
 
+    // Check if player is already in this team
+    if (localTeamPlayers.some(p => p.id === playerId)) {
+      toast.error("This player is already in your team");
+      return;
+    }
+
     // Check if player is already sold
     if (player.sold) {
       toast.error("This player has already been sold");
@@ -190,7 +286,7 @@ export default function TeamCard({ team, darkMode = false }) {
     }
 
     // Ensure we're working with numeric values for prices
-    const playerPrice = parseFloat(player.price);
+    const playerPrice = parseFloat(String(player.price));
     if (isNaN(playerPrice)) {
       console.error("Invalid player price:", player.price);
       return;
@@ -202,12 +298,15 @@ export default function TeamCard({ team, darkMode = false }) {
       return;
     }
 
-    // Create a copy with the bid amount
+    // Create a copy with the bid amount - use stable ID
+    const newId = getUniqueId();
     const playerWithBid = {
       ...player,
       bidAmount: playerPrice,
       sold: true,
       teamId: team.id,
+      // Use stable ID
+      uniqueKey: `player-${player.id}-${newId}`
     };
 
     // Open the bid modal for confirmation
@@ -226,7 +325,7 @@ export default function TeamCard({ team, darkMode = false }) {
       return;
     }
 
-    const minPrice = parseFloat(selectedPlayer.price);
+    const minPrice = parseFloat(String(selectedPlayer.price));
     if (bid < minPrice) {
       setError(`Bid must be at least ${minPrice.toLocaleString()}.`);
       return;
@@ -241,17 +340,26 @@ export default function TeamCard({ team, darkMode = false }) {
       setIsSubmitting(true);
 
       // Optimistic UI update - add player to team
+      const newId = getUniqueId();
       const playerWithBid = {
         ...selectedPlayer,
         bidAmount: bid,
+        bidTime: new Date().toISOString(), // This is okay for optimistic updates 
+        uniqueKey: `player-${selectedPlayer.id}-${newId}`
       };
-
-      // Update local state immediately for responsive UI
-      setLocalTeamPlayers((prev) => [...prev, playerWithBid]);
-      setLocalTeamBudget((prev) => prev - bid);
+      
+      // Check if player is already in team before adding
+      const playerAlreadyExists = localTeamPlayers.some(p => p.id === playerWithBid.id);
+      
+      if (!playerAlreadyExists) {
+        // Update local state immediately for responsive UI
+        setLocalTeamPlayers((prev) => [...prev, playerWithBid]);
+        setLocalTeamBudget((prev) => prev - bid);
+      }
 
       // Send to server
       await addPlayerToTeam(team.id, selectedPlayer.id, bid);
+      toast.success(`Added ${selectedPlayer.name} to team`);
     } catch (error) {
       console.error("Bid error:", error);
       const errorMsg = error.response?.data?.message || "Error placing bid";
@@ -286,7 +394,7 @@ export default function TeamCard({ team, darkMode = false }) {
 
     return localTeamPlayers.reduce((total, player) => {
       // IMPORTANT: For sold players, always use bidAmount if available
-      const amount = parseFloat(player.bidAmount || player.price) || 0;
+      const amount = parseFloat(String(player.bidAmount || player.price)) || 0;
       return total + amount;
     }, 0);
   };
@@ -307,7 +415,7 @@ export default function TeamCard({ team, darkMode = false }) {
 
     // Ensure bid amount is a number - use bidAmount if available
     const bidAmount =
-      parseFloat(playerToRemove.bidAmount || playerToRemove.price) || 0;
+      parseFloat(String(playerToRemove.bidAmount || playerToRemove.price)) || 0;
 
     // Optimistically update local state
     setLocalTeamPlayers((prev) => prev.filter((p) => p.id !== playerId));
@@ -389,9 +497,9 @@ export default function TeamCard({ team, darkMode = false }) {
               >
                 <Users size={16} />
               </button>
-              {socketStatus === "disconnected" && (
+              {isClient && socketStatus === "disconnected" && (
                 <button
-                  onClick={() => forceReconnect()}
+                  onClick={() => connectSocket()}
                   className="p-1.5 rounded-full bg-blue-700 hover:bg-blue-600 transition"
                   title="Reconnect socket"
                 >
@@ -401,8 +509,8 @@ export default function TeamCard({ team, darkMode = false }) {
               <div className="bg-blue-700 px-3 py-1 rounded-full flex items-center">
                 <Coins className="text-blue-300 mr-1" size={16} />
                 <span className="font-medium">
-                  {parseFloat(localTeamBudget).toLocaleString()} /{" "}
-                  {parseFloat(initialBudget).toLocaleString()}
+                  {parseFloat(String(localTeamBudget)).toLocaleString()} /{" "}
+                  {parseFloat(String(initialBudget)).toLocaleString()}
                 </span>
               </div>
             </div>
@@ -412,7 +520,7 @@ export default function TeamCard({ team, darkMode = false }) {
           <div className="mt-3">
             <div className="flex justify-between text-xs text-blue-200 mb-1">
               <span>
-                Budget Used: {parseFloat(spentAmount).toLocaleString()}
+                Budget Used: {parseFloat(String(spentAmount)).toLocaleString()}
               </span>
               <span>
                 {isNaN(spentPercentage) ? "0" : spentPercentage.toFixed(1)}%
@@ -536,7 +644,7 @@ export default function TeamCard({ team, darkMode = false }) {
                       darkMode ? "text-blue-300" : "text-blue-600"
                     }`}
                   >
-                    {parseFloat(localTeamBudget).toLocaleString()}
+                    {parseFloat(String(localTeamBudget)).toLocaleString()}
                   </div>
                 </div>
               </div>
@@ -580,26 +688,6 @@ export default function TeamCard({ team, darkMode = false }) {
 
         {/* Main content area with padding */}
         <div className="p-4">
-          {/* Socket status indicator */}
-          <div className="flex items-center justify-end mb-2">
-            <div
-              className={`flex items-center text-xs ${
-                socketStatus === "connected" ? "text-green-600" : "text-red-500"
-              }`}
-            >
-              {/* <div
-                className={`w-2 h-2 rounded-full mr-1 ${
-                  socketStatus === "connected" ? "bg-green-500" : "bg-red-500"
-                }`}
-              ></div> */}
-              {/* <span>
-                {socketStatus === "connected"
-                  ? "Live updates active"
-                  : "Reconnecting..."}
-              </span> */}
-            </div>
-          </div>
-
           {/* Drop Zone Indicator when empty */}
           {localTeamPlayers.length === 0 && (
             <div
@@ -625,13 +713,13 @@ export default function TeamCard({ team, darkMode = false }) {
             </div>
           )}
 
-          {/* Player List with staggered animations */}
+          {/* Player List with staggered animations - Use uniqueKey for React key */}
           <div className="mt-2 space-y-2">
             {localTeamPlayers.length > 0 ? (
               <AnimatePresence>
                 {localTeamPlayers.map((player, index) => (
                   <motion.div
-                    key={player.id || index}
+                    key={player.uniqueKey || `player-static-${index}`}
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: 20 }}
@@ -699,7 +787,9 @@ export default function TeamCard({ team, darkMode = false }) {
                   darkMode ? "text-blue-300" : "text-blue-600"
                 } ml-1`}
               >
-                {parseFloat(selectedPlayer?.price || 0).toLocaleString()}
+                {parseFloat(
+                  String(selectedPlayer?.price || 0)
+                ).toLocaleString()}
               </span>
             </DialogDescription>
           </DialogHeader>
@@ -738,7 +828,9 @@ export default function TeamCard({ team, darkMode = false }) {
               }`}
               placeholder={
                 selectedPlayer
-                  ? `Min: ${parseFloat(selectedPlayer.price).toLocaleString()}`
+                  ? `Min: ${parseFloat(
+                      String(selectedPlayer.price)
+                    ).toLocaleString()}`
                   : ""
               }
               autoFocus
@@ -780,7 +872,7 @@ export default function TeamCard({ team, darkMode = false }) {
                     darkMode ? "text-blue-300" : "text-blue-700"
                   }`}
                 >
-                  {parseFloat(localTeamBudget).toLocaleString()}
+                  {parseFloat(String(localTeamBudget)).toLocaleString()}
                 </span>
               </div>
             </div>
@@ -825,4 +917,3 @@ export default function TeamCard({ team, darkMode = false }) {
       </Dialog>
     </>
   );
-}
