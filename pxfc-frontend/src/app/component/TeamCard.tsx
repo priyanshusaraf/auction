@@ -28,19 +28,13 @@ import {
 import { socket, connectSocket } from "@/config/socketClient";
 import { toast } from "react-hot-toast";
 
-// Use a counter that doesn't reset on hydration
+// Stable ID generator that doesn't reset on hydration
 let uniqueIdCounter = 0;
 const getUniqueId = () => `dynamic-id-${uniqueIdCounter++}`;
 
 export default function TeamCard({ team, darkMode = false }) {
   const { isSignedIn, user } = useUser();
   const socketRef = useRef(socket);
-
-  // Initialize the client-side state - Fix hydration mismatch by not setting values during SSR
-  const [isClient, setIsClient] = useState(false);
-  useEffect(() => {
-    setIsClient(true);
-  }, []);
 
   // Get all players and store functions
   const players = useAuctionStore((state) => state.players);
@@ -51,6 +45,8 @@ export default function TeamCard({ team, darkMode = false }) {
     markPlayerAsSold,
   } = useAuctionStore();
 
+  // Client-side state to avoid hydration mismatch
+  const [isClient, setIsClient] = useState(false);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [bidPrice, setBidPrice] = useState("");
   const [error, setError] = useState("");
@@ -62,69 +58,73 @@ export default function TeamCard({ team, darkMode = false }) {
   const [socketStatus, setSocketStatus] = useState("connected");
   const [lastUpdate, setLastUpdate] = useState(null);
   const [showStats, setShowStats] = useState(false);
-  const [socketDebug, setSocketDebug] = useState([]);
+  const [playerIds, setPlayerIds] = useState(new Set()); // Track added player IDs
 
-  // Process team data to ensure stable IDs - avoiding Date.now() and Math.random()
+  // Ensure we run client-side only code after hydration
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  // Process team data ensuring we have stable, unique IDs and prevent duplication
   const processTeamPlayers = useCallback((players = []) => {
     if (!Array.isArray(players)) return [];
-    return players.map((player, index) => ({
-      ...player,
-      id: player.id ? player.id.toString() : undefined,
-      // Use stable ID assignment that's consistent between server and client
-      uniqueKey: player.id ? `player-${player.id}` : `player-static-${index}`
-    }));
+    
+    // Create a unique map by player ID
+    const playerMap = new Map();
+    
+    players.forEach((player, index) => {
+      // Ensure player has an ID
+      const playerId = player.id ? player.id.toString() : `unknown-${index}`;
+      
+      // Only add if not already in the map
+      if (!playerMap.has(playerId)) {
+        // Create a processed player with stable uniqueKey
+        playerMap.set(playerId, {
+          ...player,
+          id: playerId,
+          uniqueKey: `player-${playerId}`
+        });
+      }
+    });
+    
+    // Return array of unique players
+    return Array.from(playerMap.values());
   }, []);
 
   // Update local state when team prop changes
   useEffect(() => {
-    if (!team) return;
+    if (!team || typeof window === 'undefined') return;
     
-    // Only run on client to avoid hydration mismatch
-    if (typeof window === 'undefined') return;
-    
-    // Use initial_budget from the backend if available
+    // Parse budget values
     const availableBudget = parseFloat(String(team.budget)) || 0;
     const totalInitialBudget = parseFloat(String(team.initial_budget)) || 650000;
-
-    // Process player data with stable keys
+    
+    // Process team players for deduplication
     const processedPlayers = processTeamPlayers(team.players || []);
     
-    // Remove any duplicates by ID
-    const uniquePlayers = [...new Map(processedPlayers.map(player => 
-      [player.id, player]
-    )).values()];
+    // Update player IDs set for tracking
+    setPlayerIds(new Set(processedPlayers.map(p => p.id)));
     
-    // Update local state with deduped array
-    setLocalTeamPlayers(uniquePlayers);
+    // Update local state with processed players
+    setLocalTeamPlayers(processedPlayers);
     setLocalTeamBudget(availableBudget);
     setInitialBudget(totalInitialBudget);
     
   }, [team, processTeamPlayers]);
 
-  // Track socket connection status - client-side only
+  // Setup socket connection status tracking
   useEffect(() => {
-    // Skip during SSR
-    if (typeof window === 'undefined') return;
-    if (!socketRef.current) return;
+    if (typeof window === 'undefined' || !socketRef.current) return;
     
-    const handleConnect = () => {
-      setSocketStatus("connected");
-    };
-
-    const handleDisconnect = () => {
-      setSocketStatus("disconnected");
-    };
-
-    // Ensure socket is connected when component mounts
+    const handleConnect = () => setSocketStatus("connected");
+    const handleDisconnect = () => setSocketStatus("disconnected");
+    
     connectSocket();
-
-    // Set initial status based on current connection state
     setSocketStatus(socketRef.current.connected ? "connected" : "disconnected");
-
-    // Track connection status
+    
     socketRef.current.on("connect", handleConnect);
     socketRef.current.on("disconnect", handleDisconnect);
-
+    
     return () => {
       if (socketRef.current) {
         socketRef.current.off("connect", handleConnect);
@@ -133,83 +133,88 @@ export default function TeamCard({ team, darkMode = false }) {
     };
   }, []);
 
-  // Handle socket updates for this specific team - client-side only
+  // Handle socket updates for this team
   useEffect(() => {
-    // Skip during SSR
-    if (typeof window === 'undefined') return;
-    if (!socketRef.current || !team?.id) return;
+    if (typeof window === 'undefined' || !socketRef.current || !team?.id) return;
 
     const handleUpdate = (data) => {
-      // Log the update for debugging
       console.log(`[TeamCard ${team.id}] Socket update:`, data);
-      
-      // Add to debug log
-      setSocketDebug(prev => [...prev.slice(-4), { 
-        time: new Date().toLocaleTimeString(),
-        type: data.type,
-        hasTeamData: !!data.teamData,
-        hasPlayerData: !!data.playerData
-      }]);
-      
-      // Track when we received the update
       setLastUpdate(new Date().toISOString());
 
-      // For BID_ACCEPTED and team matches the one in playerData
+      // For BID_ACCEPTED updates
       if (data.type === "BID_ACCEPTED" && data.playerData?.teamId === team.id) {
-        // Directly add the player to our team if not already there
-        setLocalTeamPlayers(prevPlayers => {
-          // Check if player already exists
-          const exists = prevPlayers.some(p => p.id === data.playerData.id);
-          if (exists) return prevPlayers;
-          
-          // Generate a stable ID
-          const newId = getUniqueId();
-          
-          // Add player with stable key
-          return [...prevPlayers, {
-            ...data.playerData,
-            uniqueKey: `player-${data.playerData.id}-${newId}`
-          }];
-        });
+        const playerId = data.playerData.id.toString();
         
-        // Update local budget
-        if (data.playerData.bidAmount) {
-          setLocalTeamBudget(prev => prev - parseFloat(String(data.playerData.bidAmount)));
+        // Check if player already exists in our tracking set
+        if (!playerIds.has(playerId)) {
+          // Add to tracking set
+          setPlayerIds(prev => {
+            const newSet = new Set(prev);
+            newSet.add(playerId);
+            return newSet;
+          });
+          
+          // Add player to local team
+          setLocalTeamPlayers(prev => {
+            // Final safety check to prevent duplication
+            if (prev.some(p => p.id === playerId)) return prev;
+            
+            return [...prev, {
+              ...data.playerData,
+              uniqueKey: `player-${playerId}`
+            }];
+          });
+          
+          // Update local budget
+          if (data.playerData.bidAmount) {
+            setLocalTeamBudget(prev => prev - parseFloat(String(data.playerData.bidAmount)));
+          }
         }
       }
       
-      // For PLAYER_REMOVED and player was in this team
-      if (data.type === "PLAYER_REMOVED" && 
-          data.playerData && 
-          localTeamPlayers.some(p => p.id === data.playerData.id)) {
+      // For PLAYER_REMOVED updates
+      if (data.type === "PLAYER_REMOVED" && data.playerData) {
+        const playerId = data.playerData.id.toString();
         
-        // Find player to get bid amount
-        const player = localTeamPlayers.find(p => p.id === data.playerData.id);
-        const bidAmount = player ? parseFloat(String(player.bidAmount || player.price)) : 0;
-        
-        // Remove player
-        setLocalTeamPlayers(prev => prev.filter(p => p.id !== data.playerData.id));
-        
-        // Restore budget
-        setLocalTeamBudget(prev => prev + bidAmount);
+        // Check if player is in this team
+        if (playerIds.has(playerId)) {
+          // Find player to get bid amount for budget restoration
+          const player = localTeamPlayers.find(p => p.id === playerId);
+          const bidAmount = player ? parseFloat(String(player.bidAmount || player.price)) : 0;
+          
+          // Remove player from tracking
+          setPlayerIds(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(playerId);
+            return newSet;
+          });
+          
+          // Remove player from local team
+          setLocalTeamPlayers(prev => prev.filter(p => p.id !== playerId));
+          
+          // Restore budget
+          setLocalTeamBudget(prev => prev + bidAmount);
+        }
       }
 
-      // Check if this update contains team data for our team
+      // Handle team data updates
       if (data.teamData && data.teamData.id === team.id) {
-        console.log(`[TeamCard ${team.id}] Updating from team data:`, data.teamData);
+        console.log(`[TeamCard ${team.id}] Processing team data:`, data.teamData);
         
-        // Update the budget if provided
+        // Update budget if provided
         if (data.teamData.budget !== undefined) {
           setLocalTeamBudget(parseFloat(String(data.teamData.budget)));
         }
         
-        // Update team players if provided
+        // Update team players with deduplication
         if (data.teamData.players && Array.isArray(data.teamData.players)) {
-          // Process players with stable keys - avoid Date.now()
-          const updatedPlayers = processTeamPlayers(data.teamData.players);
+          const processedPlayers = processTeamPlayers(data.teamData.players);
           
-          // Set the updated players list
-          setLocalTeamPlayers(updatedPlayers);
+          // Update tracking set
+          setPlayerIds(new Set(processedPlayers.map(p => p.id)));
+          
+          // Update local players
+          setLocalTeamPlayers(processedPlayers);
         }
 
         // Update global store if authenticated
@@ -219,29 +224,26 @@ export default function TeamCard({ team, darkMode = false }) {
       }
     };
 
-    // Listen for auction updates
     socketRef.current.on("auctionUpdate", handleUpdate);
-
+    
     return () => {
       if (socketRef.current) {
         socketRef.current.off("auctionUpdate", handleUpdate);
       }
     };
-  }, [team?.id, isSignedIn, updateTeamData, localTeamPlayers, processTeamPlayers]);
+  }, [team?.id, isSignedIn, updateTeamData, localTeamPlayers, processTeamPlayers, playerIds]);
 
+  // Loading state
   if (!team) {
     return (
-      <div
-        className={`p-6 ${
-          darkMode ? "bg-gray-700 text-gray-200" : "bg-white text-gray-500"
-        } shadow-md rounded-lg flex items-center justify-center`}
-      >
+      <div className={`p-6 ${darkMode ? "bg-gray-700 text-gray-200" : "bg-white text-gray-500"} shadow-md rounded-lg flex items-center justify-center`}>
         <Loader className="animate-spin mr-2" size={20} />
         <span>Loading team...</span>
       </div>
     );
   }
 
+  // Event handlers for drag and drop
   const handleDragOver = (e) => {
     if (!isSignedIn) return;
     e.preventDefault();
@@ -255,27 +257,26 @@ export default function TeamCard({ team, darkMode = false }) {
 
   const handleDrop = (e) => {
     if (!isSignedIn) return;
-
     e.preventDefault();
     setIsDropActive(false);
 
-    // Get the player ID from the data transfer
+    // Get player ID from drag data
     const playerId = e.dataTransfer.getData("playerId");
     if (!playerId) {
       console.error("No player ID found in drag data");
       return;
     }
 
-    // Find the player from the players array in the store
-    const player = players.find((p) => p.id.toString() === playerId);
-    if (!player) {
-      console.error("Player not found:", playerId);
+    // Critical duplication check
+    if (playerIds.has(playerId)) {
+      toast.error("This player is already in your team");
       return;
     }
 
-    // Check if player is already in this team
-    if (localTeamPlayers.some(p => p.id === playerId)) {
-      toast.error("This player is already in your team");
+    // Find player from store
+    const player = players.find(p => p.id.toString() === playerId);
+    if (!player) {
+      console.error("Player not found:", playerId);
       return;
     }
 
@@ -285,41 +286,37 @@ export default function TeamCard({ team, darkMode = false }) {
       return;
     }
 
-    // Ensure we're working with numeric values for prices
+    // Check budget
     const playerPrice = parseFloat(String(player.price));
     if (isNaN(playerPrice)) {
       console.error("Invalid player price:", player.price);
       return;
     }
 
-    // Check if budget is sufficient
     if (playerPrice > localTeamBudget) {
       toast.error("Not enough budget to add this player");
       return;
     }
 
-    // Create a copy with the bid amount - use stable ID
-    const newId = getUniqueId();
-    const playerWithBid = {
+    // Open bid modal
+    setSelectedPlayer({
       ...player,
       bidAmount: playerPrice,
       sold: true,
-      teamId: team.id,
-      // Use stable ID
-      uniqueKey: `player-${player.id}-${newId}`
-    };
-
-    // Open the bid modal for confirmation
-    setSelectedPlayer(playerWithBid);
+      teamId: team.id
+    });
     setBidPrice(playerPrice.toString());
     setError("");
   };
 
+  // Handle bid confirmation
   const confirmBid = async () => {
     if (!selectedPlayer) return;
 
     const bid = parseFloat(bidPrice);
-
+    const playerId = selectedPlayer.id.toString();
+    
+    // Validate bid
     if (isNaN(bid) || bid <= 0) {
       setError("Please enter a valid number.");
       return;
@@ -339,61 +336,76 @@ export default function TeamCard({ team, darkMode = false }) {
     try {
       setIsSubmitting(true);
 
-      // Optimistic UI update - add player to team
-      const newId = getUniqueId();
+      // Final duplication check
+      if (playerIds.has(playerId)) {
+        setError("This player is already in your team.");
+        return;
+      }
+
+      // Add to tracking set
+      setPlayerIds(prev => {
+        const newSet = new Set(prev);
+        newSet.add(playerId);
+        return newSet;
+      });
+      
+      // Optimistically update UI
       const playerWithBid = {
         ...selectedPlayer,
         bidAmount: bid,
-        bidTime: new Date().toISOString(), // This is okay for optimistic updates 
-        uniqueKey: `player-${selectedPlayer.id}-${newId}`
+        bidTime: new Date().toISOString(),
+        uniqueKey: `player-${playerId}`
       };
       
-      // Check if player is already in team before adding
-      const playerAlreadyExists = localTeamPlayers.some(p => p.id === playerWithBid.id);
-      
-      if (!playerAlreadyExists) {
-        // Update local state immediately for responsive UI
-        setLocalTeamPlayers((prev) => [...prev, playerWithBid]);
-        setLocalTeamBudget((prev) => prev - bid);
-      }
+      setLocalTeamPlayers(prev => [...prev, playerWithBid]);
+      setLocalTeamBudget(prev => prev - bid);
 
       // Send to server
-      await addPlayerToTeam(team.id, selectedPlayer.id, bid);
+      await addPlayerToTeam(team.id, playerId, bid);
       toast.success(`Added ${selectedPlayer.name} to team`);
     } catch (error) {
       console.error("Bid error:", error);
+      
+      // Remove from tracking on error
+      setPlayerIds(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(playerId);
+        return newSet;
+      });
+      
+      // Revert optimistic updates
+      setLocalTeamPlayers(prev => prev.filter(p => p.id !== playerId));
+      setLocalTeamBudget(prev => prev + bid);
+      
       const errorMsg = error.response?.data?.message || "Error placing bid";
       toast.error(errorMsg);
-
-      // Revert optimistic update on error
-      setLocalTeamPlayers((prev) =>
-        prev.filter((p) => p.id !== selectedPlayer.id)
-      );
-      setLocalTeamBudget((prev) => prev + parseFloat(bidPrice));
     } finally {
       setIsSubmitting(false);
       closeModal();
     }
   };
 
+  // Handle Enter key in bid input
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !error && !isSubmitting) {
       confirmBid();
     }
   };
 
+  // Close the bid modal
   const closeModal = () => {
     setSelectedPlayer(null);
     setBidPrice("");
     setError("");
   };
 
+  // Calculate team stats
   const calculateSpent = () => {
     // Calculate spent amount using local team players
     if (!localTeamPlayers.length) return 0;
 
     return localTeamPlayers.reduce((total, player) => {
-      // IMPORTANT: For sold players, always use bidAmount if available
+      // Always use bidAmount if available
       const amount = parseFloat(String(player.bidAmount || player.price)) || 0;
       return total + amount;
     }, 0);
@@ -401,39 +413,87 @@ export default function TeamCard({ team, darkMode = false }) {
 
   const spentAmount = calculateSpent();
 
-  // Calculate percentage
-  const spentPercentage =
-    initialBudget > 0 ? (spentAmount / initialBudget) * 100 : 0;
+  // Calculate budget percentage
+  const spentPercentage = initialBudget > 0 ? (spentAmount / initialBudget) * 100 : 0;
 
-  // Handle player removal with optimistic update
+  // Handle player removal with improved error handling
   const handleRemovePlayer = async (playerId) => {
     if (!isSignedIn) return;
 
+    // Ensure playerId is string
+    const playerIdStr = playerId.toString();
+    
     // Find the player to be removed
-    const playerToRemove = localTeamPlayers.find((p) => p.id === playerId);
-    if (!playerToRemove) return;
+    const playerToRemove = localTeamPlayers.find(p => p.id === playerIdStr);
+    if (!playerToRemove) {
+      console.error("Cannot find player to remove:", playerIdStr);
+      return;
+    }
 
-    // Ensure bid amount is a number - use bidAmount if available
-    const bidAmount =
-      parseFloat(String(playerToRemove.bidAmount || playerToRemove.price)) || 0;
+    // Calculate bid amount for budget restoration
+    const bidAmount = parseFloat(String(playerToRemove.bidAmount || playerToRemove.price)) || 0;
 
-    // Optimistically update local state
-    setLocalTeamPlayers((prev) => prev.filter((p) => p.id !== playerId));
-    setLocalTeamBudget((prev) => prev + bidAmount);
+    // Remove from tracking first
+    setPlayerIds(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(playerIdStr);
+      return newSet;
+    });
+    
+    // Optimistically update UI
+    setLocalTeamPlayers(prev => prev.filter(p => p.id !== playerIdStr));
+    setLocalTeamBudget(prev => prev + bidAmount);
 
-    // Call the store function to update the server
+    // Call API to update server
     try {
-      await removePlayerFromTeam(team.id, playerId);
+      await removePlayerFromTeam(team.id, playerIdStr);
       toast.success(`Removed ${playerToRemove.name} from the team`);
     } catch (error) {
       console.error("Error removing player:", error);
+      
+      // Add back to tracking
+      setPlayerIds(prev => {
+        const newSet = new Set(prev);
+        newSet.add(playerIdStr);
+        return newSet;
+      });
+      
+      // Revert local updates
+      setLocalTeamPlayers(prev => [...prev, playerToRemove]);
+      setLocalTeamBudget(prev => prev - bidAmount);
 
-      // Revert optimistic update
-      setLocalTeamPlayers((prev) => [...prev, playerToRemove]);
-      setLocalTeamBudget((prev) => prev - bidAmount);
-
-      toast.error("Failed to remove player");
+      // Show error notification with specific message
+      const errorMsg = error.response?.data?.message || "Server error: Failed to remove player";
+      toast.error(errorMsg);
     }
+  };
+
+  // Function to sort players by category
+  const sortPlayersByCategory = (players) => {
+    // Define category priority (highest to lowest)
+    const categoryPriority = {
+      'A+': 1,
+      'A': 2,
+      'B': 3,
+      'C': 4,
+      'D': 5,
+      // Default for any other category
+      'default': 99
+    };
+
+    return [...players].sort((a, b) => {
+      // Get priority, defaulting to lowest if category not in the list
+      const priorityA = categoryPriority[a.category] || categoryPriority.default;
+      const priorityB = categoryPriority[b.category] || categoryPriority.default;
+      
+      // Sort primarily by category
+      if (priorityA !== priorityB) {
+        return priorityA - priorityB;
+      }
+      
+      // If same category, sort by name as secondary sorting criterion
+      return a.name.localeCompare(b.name);
+    });
   };
 
   // Get team composition stats
@@ -476,39 +536,39 @@ export default function TeamCard({ team, darkMode = false }) {
           transform: isDropActive ? "scale(1.02)" : "scale(1)",
         }}
       >
-        {/* Team Header with enhanced design */}
+        {/* Team Header */}
         <div
           className={`bg-gradient-to-r ${
             darkMode
               ? "from-blue-900 to-indigo-900"
               : "from-blue-600 to-blue-800"
-          } p-4 text-white`}
+          } p-3 text-white`}
         >
           <div className="flex justify-between items-center">
             <div className="flex items-center">
-              <UserRound className="mr-2 text-blue-200" size={24} />
-              <h3 className="text-xl font-bold">{team.name}</h3>
+              <UserRound className="mr-2 text-blue-200" size={20} />
+              <h3 className="text-lg font-bold truncate">{team.name}</h3>
             </div>
             <div className="flex space-x-2">
               <button
                 onClick={() => setShowStats(!showStats)}
-                className="p-1.5 rounded-full bg-blue-700 hover:bg-blue-600 transition"
+                className="p-1 rounded-full bg-blue-700 hover:bg-blue-600 transition"
                 title="Team Statistics"
               >
-                <Users size={16} />
+                <Users size={14} />
               </button>
               {isClient && socketStatus === "disconnected" && (
                 <button
                   onClick={() => connectSocket()}
-                  className="p-1.5 rounded-full bg-blue-700 hover:bg-blue-600 transition"
+                  className="p-1 rounded-full bg-blue-700 hover:bg-blue-600 transition"
                   title="Reconnect socket"
                 >
-                  <RefreshCw size={16} />
+                  <RefreshCw size={14} />
                 </button>
               )}
-              <div className="bg-blue-700 px-3 py-1 rounded-full flex items-center">
-                <Coins className="text-blue-300 mr-1" size={16} />
-                <span className="font-medium">
+              <div className="bg-blue-700 px-2 py-0.5 rounded-full flex items-center">
+                <Coins className="text-blue-300 mr-1" size={14} />
+                <span className="font-medium text-sm">
                   {parseFloat(String(localTeamBudget)).toLocaleString()} /{" "}
                   {parseFloat(String(initialBudget)).toLocaleString()}
                 </span>
@@ -516,8 +576,8 @@ export default function TeamCard({ team, darkMode = false }) {
             </div>
           </div>
 
-          {/* Budget Progress Bar with improved design */}
-          <div className="mt-3">
+          {/* Budget Progress Bar */}
+          <div className="mt-2">
             <div className="flex justify-between text-xs text-blue-200 mb-1">
               <span>
                 Budget Used: {parseFloat(String(spentAmount)).toLocaleString()}
@@ -526,14 +586,14 @@ export default function TeamCard({ team, darkMode = false }) {
                 {isNaN(spentPercentage) ? "0" : spentPercentage.toFixed(1)}%
               </span>
             </div>
-            <div className="w-full bg-blue-900 rounded-full h-2 overflow-hidden">
+            <div className="w-full bg-blue-900 rounded-full h-1.5 overflow-hidden">
               <motion.div
                 initial={{ width: 0 }}
                 animate={{
                   width: `${isNaN(spentPercentage) ? 0 : spentPercentage}%`,
                 }}
                 transition={{ duration: 0.5 }}
-                className={`h-2 rounded-full ${
+                className={`h-1.5 rounded-full ${
                   spentPercentage > 80
                     ? "bg-red-500"
                     : spentPercentage > 60
@@ -545,7 +605,7 @@ export default function TeamCard({ team, darkMode = false }) {
           </div>
         </div>
 
-        {/* Team Stats Panel - conditionally visible */}
+        {/* Team Stats Panel */}
         <AnimatePresence>
           {showStats && (
             <motion.div
@@ -556,7 +616,7 @@ export default function TeamCard({ team, darkMode = false }) {
                 darkMode
                   ? "bg-gray-800 border-gray-700"
                   : "bg-blue-50 border-blue-100"
-              } p-4 border-b`}
+              } p-3 border-b`}
             >
               <div className="flex justify-between items-center">
                 <div className="flex items-center">
@@ -564,10 +624,10 @@ export default function TeamCard({ team, darkMode = false }) {
                     className={`${
                       darkMode ? "text-blue-400" : "text-blue-600"
                     } mr-2`}
-                    size={18}
+                    size={16}
                   />
                   <h4
-                    className={`font-semibold ${
+                    className={`font-semibold text-sm ${
                       darkMode ? "text-blue-300" : "text-blue-800"
                     }`}
                   >
@@ -586,7 +646,7 @@ export default function TeamCard({ team, darkMode = false }) {
                 </button>
               </div>
 
-              <div className="grid grid-cols-3 gap-3 mt-2 text-sm">
+              <div className="grid grid-cols-3 gap-2 mt-2 text-sm">
                 <div
                   className={`${
                     darkMode ? "bg-gray-700" : "bg-white"
@@ -595,12 +655,12 @@ export default function TeamCard({ team, darkMode = false }) {
                   <div
                     className={`${
                       darkMode ? "text-gray-300" : "text-gray-500"
-                    }`}
+                    } text-xs`}
                   >
                     Players
                   </div>
                   <div
-                    className={`text-xl font-semibold ${
+                    className={`text-lg font-semibold ${
                       darkMode ? "text-blue-300" : "text-blue-600"
                     }`}
                   >
@@ -615,12 +675,12 @@ export default function TeamCard({ team, darkMode = false }) {
                   <div
                     className={`${
                       darkMode ? "text-gray-300" : "text-gray-500"
-                    }`}
+                    } text-xs`}
                   >
                     Avg. Bid
                   </div>
                   <div
-                    className={`text-xl font-semibold ${
+                    className={`text-lg font-semibold ${
                       darkMode ? "text-blue-300" : "text-blue-600"
                     }`}
                   >
@@ -635,12 +695,12 @@ export default function TeamCard({ team, darkMode = false }) {
                   <div
                     className={`${
                       darkMode ? "text-gray-300" : "text-gray-500"
-                    }`}
+                    } text-xs`}
                   >
                     Remaining
                   </div>
                   <div
-                    className={`text-xl font-semibold ${
+                    className={`text-lg font-semibold ${
                       darkMode ? "text-blue-300" : "text-blue-600"
                     }`}
                   >
@@ -657,21 +717,21 @@ export default function TeamCard({ team, darkMode = false }) {
                 <div
                   className={`${
                     darkMode ? "text-gray-300" : "text-gray-500"
-                  } mb-1`}
+                  } mb-1 text-xs`}
                 >
                   Category Distribution
                 </div>
-                <div className="flex space-x-2 overflow-x-auto pb-1">
+                <div className="flex flex-wrap gap-1 pb-1">
                   {Object.entries(teamStats.categories).map(
                     ([category, count]) => (
                       <div
                         key={category}
-                        className={`flex-shrink-0 ${
+                        className={`${
                           darkMode ? "bg-gray-600" : "bg-blue-100"
-                        } px-2 py-1 rounded text-xs`}
+                        } px-1.5 py-0.5 rounded text-xs`}
                       >
                         <span
-                          className={`font-medium ${
+                          className={`${
                             darkMode ? "text-blue-200" : "text-blue-800"
                           }`}
                         >
@@ -686,25 +746,25 @@ export default function TeamCard({ team, darkMode = false }) {
           )}
         </AnimatePresence>
 
-        {/* Main content area with padding */}
-        <div className="p-4">
-          {/* Drop Zone Indicator when empty */}
+        {/* Main content area */}
+        <div className="p-3">
+          {/* Empty state */}
           {localTeamPlayers.length === 0 && (
             <div
               className={`border-2 border-dashed ${
                 darkMode
                   ? "border-gray-600 bg-gray-800"
                   : "border-gray-300 bg-gray-50"
-              } rounded-lg p-6 text-center my-4`}
+              } rounded-lg p-5 text-center my-2`}
             >
               <motion.div
-                animate={{ y: [0, -5, 0] }}
+                animate={{ y: [0, -3, 0] }}
                 transition={{
                   repeat: isDropActive ? Infinity : 0,
                   duration: 1,
                 }}
               >
-                <p className={darkMode ? "text-gray-400" : "text-gray-400"}>
+                <p className={`${darkMode ? "text-gray-400" : "text-gray-400"} text-sm`}>
                   {isSignedIn
                     ? "Drag players here to add to team"
                     : "Sign in to manage team players"}
@@ -713,17 +773,16 @@ export default function TeamCard({ team, darkMode = false }) {
             </div>
           )}
 
-          {/* Player List with staggered animations - Use uniqueKey for React key */}
-          <div className="mt-2 space-y-2">
+          {/* Player list - sorted by category */}
+          <div className="mt-1 space-y-2 max-h-[300px] overflow-y-auto">
             {localTeamPlayers.length > 0 ? (
               <AnimatePresence>
-                {localTeamPlayers.map((player, index) => (
+                {sortPlayersByCategory(localTeamPlayers).map((player) => (
                   <motion.div
-                    key={player.uniqueKey || `player-static-${index}`}
+                    key={player.uniqueKey || `player-${player.id}`}
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: 20 }}
-                    transition={{ delay: index * 0.05 }}
                     whileHover={{ scale: 1.01 }}
                   >
                     <PlayerCard
@@ -737,7 +796,7 @@ export default function TeamCard({ team, darkMode = false }) {
               </AnimatePresence>
             ) : (
               <div
-                className={`text-center py-4 ${
+                className={`text-center py-3 ${
                   darkMode ? "text-gray-400" : "text-gray-400"
                 } text-sm`}
               >
@@ -748,7 +807,7 @@ export default function TeamCard({ team, darkMode = false }) {
         </div>
       </motion.div>
 
-      {/* Bid Modal with enhanced styling */}
+      {/* Bid Modal */}
       <Dialog open={!!selectedPlayer} onOpenChange={closeModal}>
         <DialogContent
           className={`sm:max-w-md ${
@@ -794,7 +853,7 @@ export default function TeamCard({ team, darkMode = false }) {
             </DialogDescription>
           </DialogHeader>
 
-          {/* Bid Input with animation */}
+          {/* Bid Input */}
           <motion.div
             className="flex flex-col gap-3 my-6"
             initial={{ opacity: 0, y: 10 }}
@@ -846,7 +905,7 @@ export default function TeamCard({ team, darkMode = false }) {
               </motion.p>
             )}
 
-            {/* Team budget indicator */}
+            {/* Budget indicator */}
             <div
               className={`${
                 darkMode
@@ -878,7 +937,7 @@ export default function TeamCard({ team, darkMode = false }) {
             </div>
           </motion.div>
 
-          {/* Buttons */}
+          {/* Action buttons */}
           <div className="flex justify-end gap-3 mt-4">
             <Button
               variant={darkMode ? "outline" : "outline"}

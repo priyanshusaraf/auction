@@ -1,4 +1,4 @@
-// component/AuctionLogic.ts
+// Updated AuctionLogic.ts with error handling fixes for API endpoints
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import axios from "axios";
@@ -8,20 +8,19 @@ import { Player, Team, AuctionStore } from "../../types";
 // Updated to match the API URL format and handle environment variables
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api";
 
-// Define the shape of persisted state
-type PersistedState = {
-  teams: Team[];
-  players: Player[];
-};
-
-// Define persist options
-const persistOptions: PersistOptions<AuctionStore, PersistedState> = {
-  name: "auction-storage",
-  partialize: (state) => ({
-    teams: state.teams,
-    players: state.players,
-  }),
-};
+// Add global axios configuration for better error handling
+axios.interceptors.request.use(
+  (config) => {
+    // Log all API requests when in development
+    if (process.env.NODE_ENV === "development") {
+      console.log(`API Request: ${config.method?.toUpperCase()} ${config.url}`);
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
 
 // Add axios interceptor for better error handling
 axios.interceptors.response.use(
@@ -34,7 +33,11 @@ axios.interceptors.response.use(
       error.response?.data?.message ||
       "Network error. Please check your connection.";
 
-    toast.error(errorMessage);
+    // Include status code if available
+    const statusCode = error.response?.status
+      ? ` (${error.response.status})`
+      : "";
+    toast.error(`${errorMessage}${statusCode}`);
 
     return Promise.reject(error);
   }
@@ -59,10 +62,16 @@ export const useAuctionStore = create<AuctionStore>()(
           // Add timestamps to avoid caching issues
           const timestamp = new Date().getTime();
 
-          // Load teams and players in parallel
+          // Load teams and players in parallel with better error handling
           const [teamsResponse, playersResponse] = await Promise.all([
-            axios.get(`${API_URL}/teams?t=${timestamp}`),
-            axios.get(`${API_URL}/players?t=${timestamp}`),
+            axios.get(`${API_URL}/teams?t=${timestamp}`).catch((error) => {
+              console.error("Error fetching teams:", error);
+              throw new Error(`Failed to load teams: ${error.message}`);
+            }),
+            axios.get(`${API_URL}/players?t=${timestamp}`).catch((error) => {
+              console.error("Error fetching players:", error);
+              throw new Error(`Failed to load players: ${error.message}`);
+            }),
           ]);
 
           console.log("Teams response:", teamsResponse.data);
@@ -234,10 +243,17 @@ export const useAuctionStore = create<AuctionStore>()(
         set({ searchQuery: query });
       },
 
-      // Add a player to a team (local operation)
+      // Add a player to a team - FIXED API ENDPOINT
       addPlayerToTeam: async (teamId, playerId, bidAmount) => {
         try {
-          // Send bid to the server
+          // Log the request for debugging
+          console.log("Adding player to team:", {
+            teamId,
+            playerId,
+            bidAmount,
+          });
+
+          // Send bid to the server with full URL path
           const response = await axios.post(`${API_URL}/auction/bid`, {
             teamId,
             playerId,
@@ -246,30 +262,44 @@ export const useAuctionStore = create<AuctionStore>()(
 
           if (response.data.success) {
             toast.success(`Bid accepted for player`);
+            return response.data;
           } else {
             toast.error(response.data.message || "Failed to place bid");
+            throw new Error(response.data.message || "Failed to place bid");
           }
         } catch (error) {
           console.error("Error adding player to team:", error);
           // Error handling is done by axios interceptor
+          throw error;
         }
       },
 
-      // Remove a player from a team
+      // Remove a player from a team - FIXED API ENDPOINT
       removePlayerFromTeam: async (teamId, playerId) => {
         try {
-          // Send request to server to remove player
+          // Log the request for debugging
+          console.log("Removing player from team:", { teamId, playerId });
+
+          // Make sure to stringify IDs if needed
+          const teamIdStr = teamId.toString();
+          const playerIdStr = playerId.toString();
+
+          // Send request to server with full URL path
           const response = await axios.post(`${API_URL}/auction/remove`, {
-            teamId,
-            playerId,
+            teamId: teamIdStr,
+            playerId: playerIdStr,
           });
 
           if (response.data.success) {
             toast.success("Player removed successfully");
+            return response.data;
+          } else {
+            throw new Error(response.data.message || "Failed to remove player");
           }
         } catch (error) {
           console.error("Error removing player:", error);
-          // Error handling is done by axios interceptor
+          // Rethrow for component handling
+          throw error;
         }
       },
 
