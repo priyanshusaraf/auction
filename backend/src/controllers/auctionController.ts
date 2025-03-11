@@ -102,7 +102,7 @@ export const placeBid = async (req: Request, res: Response) => {
     };
 
     // Emit socket event for real-time updates
-    emitAuctionUpdate("default", "BID_ACCEPTED", {
+    emitAuctionUpdate("BID_ACCEPTED", {
       teamData: formattedTeam,
       playerData: updatedPlayerData,
     });
@@ -113,14 +113,12 @@ export const placeBid = async (req: Request, res: Response) => {
       team: formattedTeam,
       player: updatedPlayerData,
     });
-  } catch (error: any) {
-    // Rollback in case of error
-    await trx.rollback();
+  } catch (error) {
     console.error("Error placing bid:", error);
     res.status(500).json({
       success: false,
       message: "Failed to place bid",
-      error: error.message,
+      error: (error as Error).message,
     });
   }
 };

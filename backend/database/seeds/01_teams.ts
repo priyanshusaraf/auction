@@ -1,0 +1,178 @@
+import { Knex } from "knex";
+
+export async function seed(knex: Knex): Promise<void> {
+  // Delete existing entries
+  await knex("teams").del();
+
+  // Insert teams
+  await knex("teams").insert([
+    {
+      id: 1,
+      name: "Pickle Brawlers",
+      owners: "Aayush Goel, Raghav Gupta, Shreyansh Daga & Nishant Kripalani",
+      budget: 650000,
+      logo_url: "/images/pickle-brawlers.jpeg",
+    },
+    {
+      id: 2,
+      name: "Aurora",
+      owners: "Abhishek Tibrewalla",
+      budget: 650000,
+      logo_url: "/images/aurora.png",
+    },
+    {
+      id: 3,
+      name: "Proflex Sports",
+      owners: "Aman Agarwal",
+      budget: 650000,
+      logo_url: "/images/proflex.jpeg",
+    },
+    {
+      id: 4,
+      name: "Serve-Ivors",
+      owners: "Anubhav Gupt, KV Nopany & Harshika Seksaria",
+      budget: 650000,
+      logo_url: "/images/Serve-ivors.png",
+    },
+    {
+      id: 5,
+      name: "Net Warriors",
+      owners: "Atul Tekriwal & Vivek Bhimsaria",
+      budget: 650000,
+      logo_url: "/images/net-warriors.jpeg",
+    },
+    {
+      id: 6,
+      name: "Ace King Smashers",
+      owners: "Aakash Kumar & Vidyush Dhakalia",
+      budget: 650000,
+      logo_url: "/images/ace-king-smashers.jpeg",
+    },
+    {
+      id: 7,
+      name: "Pickle Pirates",
+      owners: "Chirag Damani, Ketan Patel & Dhaval Sanghrajka",
+      budget: 650000,
+      logo_url: "/images/pickle-pirates.png",
+    },
+    {
+      id: 8,
+      name: "Lord of the Dinks",
+      owners: "Aditi Nahata, Vaibhav Nahata & Harssh Agarwaal",
+      budget: 650000,
+      logo_url: "/images/lord-of-the-dinks.jpeg",
+    },
+    {
+      id: 9,
+      name: "Volley Vultures",
+      owners: "Harsh Khaitan",
+      budget: 650000,
+      logo_url: "/images/volley-vultures.jpeg",
+    },
+    {
+      id: 10,
+      name: "The Panda Picklers",
+      owners: "Ishan Goenka",
+      budget: 650000,
+      logo_url: "/images/the-panda-picklers.jpeg",
+    },
+    {
+      id: 11,
+      name: "House of Dinks",
+      owners: "Shaurya Agarwal & Kamakshi Agarwal",
+      budget: 650000,
+      logo_url: "/images/house-of-dinks.jpeg",
+    },
+    {
+      id: 12,
+      name: "House of Dinkers",
+      owners: "Kush Jain & Samkit Jain",
+      budget: 650000,
+      logo_url: "/images/house-of-the-dinkers.jpeg",
+    },
+    {
+      id: 13,
+      name: "Space Jump Sharks",
+      owners: "Nikhil Bhambani & Rahul Worah",
+      budget: 650000,
+      logo_url: "/images/space-jump-sharks.jpeg",
+    },
+    {
+      id: 14,
+      name: "Your Smile Matters",
+      owners: "Niraj Goel, Shreyansh Shah & Abhishek Muklania",
+      budget: 650000,
+      logo_url: "/images/shanvi.jpg",
+    },
+    {
+      id: 15,
+      name: "P Square Gladiators",
+      owners: "Prakash Jhawar, Vatsal Pugalia & Tejas Gulati",
+      budget: 650000,
+      logo_url: "/images/p-square-gladiators.png",
+    },
+    {
+      id: 16,
+      name: "Spartans",
+      owners: "Pranav Jatia & Arup Mullick",
+      budget: 650000,
+      logo_url: "/images/spartans.jpeg",
+    },
+    {
+      id: 17,
+      name: "Smokey Smashers",
+      owners: "Priyanshu Bajaj & Danielle Jones",
+      budget: 650000,
+      logo_url: "/images/smokey-smashers-pickleball.jpeg",
+    },
+    {
+      id: 18,
+      name: "Joy Game Changers",
+      owners: "Raghav Agarwal",
+      budget: 650000,
+      logo_url: "/images/joy-game-changers.jpeg",
+    },
+    {
+      id: 19,
+      name: "Heritage Jindal Picklers",
+      owners: "Sailesh Arya & Anuj Jindal",
+      budget: 650000,
+      logo_url: "/images/heritage-jindal-picklers.jpeg",
+    },
+    {
+      id: 20,
+      name: "Smash",
+      owners: "Shraday Kasera & Rohan Chittlangia",
+      budget: 650000,
+      logo_url: "/images/smash.jpeg",
+    },
+    {
+      id: 21,
+      name: "PicklePotters",
+      owners: "Varun Hansaria",
+      budget: 650000,
+      logo_url: "/images/pickle-plotters.png",
+    },
+    {
+      id: 22,
+      name: "One Love Champs",
+      owners: "Vinay Sethia",
+      budget: 650000,
+      logo_url: "/images/one-love-champs.jpeg",
+    },
+    {
+      id: 23,
+      name: "Racquet Nation",
+      owners: "Raghav Todi & Yashraj Tantia",
+      budget: 650000,
+      logo_url: "/images/racquet-nation.png",
+    },
+    {
+      id: 24,
+      name: "JBG Settlers",
+      owners: "Sahastru Jajodia & Harsh Baid",
+      budget: 650000,
+      logo_url: "/images/jbg-picklers.png",
+    },
+  ]);
+}

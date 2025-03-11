@@ -1,7 +1,7 @@
 import { Knex } from "knex";
 
 // database/migrations/03_create_auction_table.js
-exports.up = function (knex: Knex) {
+export function up(knex: Knex) {
   return knex.schema.createTable("auction", (table) => {
     table.increments("id").primary();
     table
@@ -18,8 +18,8 @@ exports.up = function (knex: Knex) {
     table.decimal("final_price", 12, 2).nullable();
     table.timestamps(true, true);
   });
-};
+}
 
-exports.down = function (knex: Knex) {
+export function down(knex: Knex) {
   return knex.schema.dropTableIfExists("auction");
-};
+}

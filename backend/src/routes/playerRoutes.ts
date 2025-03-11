@@ -1,237 +1,326 @@
-import express, { Request, Response } from "express";
-import db from "../config/database";
+import express, { Request, Response, NextFunction, Router } from "express";
+import { Knex } from "knex";
+import getDB from "../config/database";
+import { emitAuctionUpdate } from "../config/socket";
 
-const router = express.Router();
+// Wrap async route handlers to handle potential async errors
+const asyncHandler = (
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<any>
+) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+};
 
-// Get all players
-router.get("/", async (req: Request, res: Response) => {
-  try {
-    console.log("GET /api/players - Fetching all players");
+// Type definitions
+interface Team {
+  id: number;
+  name: string;
+  budget: number;
+  owner_id?: number | null;
+}
 
-    const players = await db("players")
-      .select("*")
-      .orderBy("category")
-      .orderBy("name");
+interface Player {
+  id: number;
+  name: string;
+  category: string;
+  base_price: string;
+  is_sold: number;
+  team_id: number;
+}
 
-    console.log(`Found ${players.length} players`);
+// Create router with explicit typing
+const router: Router = express.Router();
 
-    // Map players to match the frontend expected format with numerical values
-    const formattedPlayers = players.map((player) => ({
-      id: player.id,
-      name: player.name,
-      category: player.category,
-      price: parseFloat(player.base_price),
-      sold: player.is_sold === 1,
-      teamId: player.team_id,
-    }));
+// Place a bid
+router.post(
+  "/bid",
+  asyncHandler(async (req: Request, res: Response) => {
+    // Get database connection
+    const db = await getDB();
 
-    res.json(formattedPlayers);
-  } catch (error) {
-    console.error("Error fetching players:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch players",
-      error: error.message,
-    });
-  }
-});
+    // Start a transaction
+    const trx = await db.transaction();
 
-// Get a single player by ID
-router.get("/:id", async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const player = await db("players").where({ id }).first();
+    try {
+      const { player_id, team_id, price } = req.body;
 
-    if (!player) {
-      return res.status(404).json({
+      // Check if player is already sold
+      const player: Player | undefined = await (
+        trx("players") as Knex.QueryBuilder
+      )
+        .where({ id: player_id })
+        .first();
+
+      if (!player) {
+        await trx.rollback();
+        return res.status(404).json({ error: "Player not found" });
+      }
+
+      if (player.is_sold === 1) {
+        await trx.rollback();
+        return res.status(400).json({ error: "Player is already sold" });
+      }
+
+      // Check if team has enough budget
+      const team: Team | undefined = await (trx("teams") as Knex.QueryBuilder)
+        .where({ id: team_id })
+        .first();
+
+      if (!team) {
+        await trx.rollback();
+        return res.status(404).json({ error: "Team not found" });
+      }
+
+      if (team.budget < price) {
+        await trx.rollback();
+        return res.status(400).json({ error: "Insufficient budget" });
+      }
+
+      // Deduct from team budget & mark player as sold
+      await (trx("teams") as Knex.QueryBuilder).where({ id: team_id }).update({
+        budget: team.budget - price,
+        updated_at: new Date(),
+      });
+
+      await (trx("players") as Knex.QueryBuilder)
+        .where({ id: player_id })
+        .update({
+          is_sold: 1,
+          team_id,
+          updated_at: new Date(),
+        });
+
+      // Insert auction record
+      const auctionRecord = {
+        player_id,
+        team_id,
+        price,
+        final_price: price,
+        created_at: new Date(),
+      };
+
+      await (trx("auction") as Knex.QueryBuilder).insert(auctionRecord);
+
+      // Commit the transaction
+      await trx.commit();
+
+      // Fetch updated team data for the response
+      const updatedTeam: Team | undefined = await (
+        db("teams") as Knex.QueryBuilder
+      )
+        .where({ id: team_id })
+        .first();
+
+      const teamPlayers: Player[] = await (db("players") as Knex.QueryBuilder)
+        .where({ team_id })
+        .select("*");
+
+      // Format players with additional info
+      const formattedPlayers = teamPlayers.map((p) => ({
+        id: p.id,
+        name: p.name,
+        category: p.category,
+        price: parseFloat(p.base_price),
+        bidAmount: p.id === player_id ? price : undefined,
+        sold: p.is_sold === 1,
+        teamId: p.team_id,
+      }));
+
+      // Format team data to match frontend expected structure
+      const formattedTeam = {
+        id: updatedTeam!.id,
+        name: updatedTeam!.name,
+        budget: updatedTeam!.budget,
+        owner_id: updatedTeam!.owner_id,
+        players: formattedPlayers,
+      };
+
+      // Format player data to match frontend expected structure
+      const updatedPlayerData = {
+        id: player.id,
+        name: player.name,
+        category: player.category,
+        price: parseFloat(player.base_price),
+        bidAmount: price,
+        sold: true,
+        teamId: team_id,
+      };
+
+      // Emit socket event for real-time updates
+      emitAuctionUpdate("BID_ACCEPTED", {
+        teamData: formattedTeam,
+        playerData: updatedPlayerData,
+      });
+
+      res.status(201).json({
+        success: true,
+        message: "Bid placed successfully",
+        team: formattedTeam,
+        player: updatedPlayerData,
+      });
+    } catch (error: any) {
+      // Rollback in case of error
+      await trx.rollback();
+      console.error("Error placing bid:", error);
+      res.status(500).json({
         success: false,
-        message: "Player not found",
+        message: "Failed to place bid",
+        error: error.message,
       });
     }
+  })
+);
 
-    // Format player to match frontend expected structure with numerical values
-    const formattedPlayer = {
-      id: player.id,
-      name: player.name,
-      category: player.category,
-      price: parseFloat(player.base_price),
-      sold: player.is_sold === 1,
-      teamId: player.team_id,
-    };
+// Remove a player from a team (undo a bid)
+router.post(
+  "/remove",
+  asyncHandler(async (req: Request, res: Response) => {
+    // Get database connection
+    const db = await getDB();
 
-    res.json(formattedPlayer);
-  } catch (error) {
-    console.error(`Error fetching player ${req.params.id}:`, error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch player",
-      error: error.message,
-    });
-  }
-});
+    // Start a transaction
+    const trx = await db.transaction();
 
-// Create a new player
-router.post("/", async (req: Request, res: Response) => {
-  try {
-    const { name, category, price } = req.body;
+    try {
+      const { teamId, playerId } = req.body;
 
-    if (!name || !price) {
-      return res.status(400).json({
-        success: false,
-        message: "Name and price are required fields",
-      });
-    }
-
-    // Validate category is one of the allowed enum values
-    const validCategories = ["A+", "A", "B", "C", "D"];
-    const playerCategory =
-      category && validCategories.includes(category) ? category : "C";
-
-    // Ensure price is a number
-    const parsedPrice = parseFloat(price);
-
-    if (isNaN(parsedPrice)) {
-      return res.status(400).json({
-        success: false,
-        message: "Price must be a valid number",
-      });
-    }
-
-    const newPlayer = {
-      name,
-      category: playerCategory,
-      base_price: parsedPrice,
-      is_sold: 0,
-      created_at: new Date(),
-      updated_at: new Date(),
-    };
-
-    // Insert and get the ID
-    const [id] = await db("players").insert(newPlayer);
-
-    // Format response to match frontend expected structure
-    const formattedPlayer = {
-      id,
-      name: newPlayer.name,
-      category: newPlayer.category,
-      price: parseFloat(newPlayer.base_price),
-      sold: false,
-      teamId: null,
-    };
-
-    res.status(201).json({
-      success: true,
-      message: "Player created successfully",
-      player: formattedPlayer,
-    });
-  } catch (error) {
-    console.error("Error creating player:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to create player",
-      error: error.message,
-    });
-  }
-});
-
-// Update a player
-router.put("/:id", async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const { name, category, price, sold, teamId } = req.body;
-
-    const player = await db("players").where({ id }).first();
-
-    if (!player) {
-      return res.status(404).json({
-        success: false,
-        message: "Player not found",
-      });
-    }
-
-    // Validate category
-    const validCategories = ["A+", "A", "B", "C", "D"];
-    let playerCategory = player.category;
-    if (category && validCategories.includes(category)) {
-      playerCategory = category;
-    }
-
-    // Parse price to ensure it's a number
-    let parsedPrice = parseFloat(player.base_price);
-    if (price !== undefined) {
-      parsedPrice = parseFloat(price);
-      if (isNaN(parsedPrice)) {
+      if (!teamId || !playerId) {
         return res.status(400).json({
           success: false,
-          message: "Price must be a valid number",
+          message: "Team ID and player ID are required",
         });
       }
-    }
 
-    const updatedPlayer = {
-      name: name || player.name,
-      category: playerCategory,
-      base_price: parsedPrice,
-      is_sold: sold !== undefined ? (sold ? 1 : 0) : player.is_sold,
-      team_id: teamId !== undefined ? teamId : player.team_id,
-      updated_at: new Date(),
-    };
+      // Get the player
+      const player = await trx("players")
+        .where({
+          id: playerId,
+          team_id: teamId,
+          is_sold: 1,
+        })
+        .first();
 
-    await db("players").where({ id }).update(updatedPlayer);
+      if (!player) {
+        await trx.rollback();
+        return res.status(404).json({
+          success: false,
+          message: "Player not found or not owned by this team",
+        });
+      }
 
-    // Format response to match frontend expected structure
-    const formattedPlayer = {
-      id: parseInt(id, 10),
-      name: updatedPlayer.name,
-      category: updatedPlayer.category,
-      price: parseFloat(updatedPlayer.base_price),
-      sold: updatedPlayer.is_sold === 1,
-      teamId: updatedPlayer.team_id,
-    };
+      // Get the team
+      const team = await trx("teams").where({ id: teamId }).first();
 
-    res.json({
-      success: true,
-      message: "Player updated successfully",
-      player: formattedPlayer,
-    });
-  } catch (error) {
-    console.error(`Error updating player ${req.params.id}:`, error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to update player",
-      error: error.message,
-    });
-  }
-});
+      if (!team) {
+        await trx.rollback();
+        return res.status(404).json({
+          success: false,
+          message: "Team not found",
+        });
+      }
 
-// Delete a player
-router.delete("/:id", async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
+      // Get the bid amount from the auction table
+      const auction = await trx("auction")
+        .where({
+          player_id: playerId,
+          team_id: teamId,
+        })
+        .orderBy("created_at", "desc")
+        .first();
 
-    const player = await db("players").where({ id }).first();
+      // Ensure bid amount is a number
+      let bidAmount = parseFloat(player.base_price);
 
-    if (!player) {
-      return res.status(404).json({
+      if (auction) {
+        bidAmount = parseFloat(auction.price);
+
+        // Delete the auction record
+        await trx("auction")
+          .where({
+            player_id: playerId,
+            team_id: teamId,
+          })
+          .delete();
+      }
+
+      // Update player status
+      await trx("players").where({ id: playerId }).update({
+        is_sold: 0,
+        team_id: null,
+        updated_at: new Date(),
+      });
+
+      // Ensure team budget is a number
+      const teamBudget = parseFloat(team.budget);
+
+      // Return the bid amount to the team's budget
+      const newBudget = teamBudget + bidAmount;
+
+      await trx("teams").where({ id: teamId }).update({
+        budget: newBudget,
+        updated_at: new Date(),
+      });
+
+      // Commit the transaction
+      await trx.commit();
+
+      // Fetch updated team data
+      const updatedTeam = await db("teams").where({ id: teamId }).first();
+      const teamPlayers = await db("players")
+        .where({ team_id: teamId })
+        .select("*");
+
+      // Format team players with proper types
+      const formattedTeamPlayers = teamPlayers.map((p) => ({
+        id: p.id,
+        name: p.name,
+        category: p.category,
+        price: parseFloat(p.base_price),
+        sold: p.is_sold === 1,
+        teamId: p.team_id,
+      }));
+
+      // Format team data to match frontend expected structure with proper types
+      const formattedTeam = {
+        id: updatedTeam.id,
+        name: updatedTeam.name,
+        budget: parseFloat(updatedTeam.budget),
+        owner_id: updatedTeam.owner_id,
+        players: formattedTeamPlayers,
+      };
+
+      // Format player data to match frontend expected structure
+      const updatedPlayerData = {
+        id: player.id,
+        name: player.name,
+        category: player.category,
+        price: parseFloat(player.base_price),
+        sold: false,
+        teamId: null,
+      };
+
+      // Emit socket event for real-time updates
+      emitAuctionUpdate("PLAYER_REMOVED", {
+        teamData: formattedTeam,
+        playerData: updatedPlayerData,
+      });
+
+      res.json({
+        success: true,
+        message: "Player removed successfully",
+        team: formattedTeam,
+      });
+    } catch (error: any) {
+      await trx.rollback();
+      console.error("Error removing bid:", error);
+      res.status(500).json({
         success: false,
-        message: "Player not found",
+        message: "Failed to remove bid",
+        error: error.message,
       });
     }
-
-    await db("players").where({ id }).delete();
-
-    res.json({
-      success: true,
-      message: "Player deleted successfully",
-    });
-  } catch (error) {
-    console.error(`Error deleting player ${req.params.id}:`, error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to delete player",
-      error: error.message,
-    });
-  }
-});
+  })
+);
 
 export default router;
